@@ -85,7 +85,7 @@ $roleFilter = $_GET['role'] ?? '';
 $statusFilter = $_GET['status'] ?? ''; // New status filter
 $sortBy = $_GET['sort_by'] ?? 'created_at';
 $sortOrder = $_GET['sort_order'] ?? 'DESC';
-$limit = 5; // Number of users per page
+$limit = 10; // Number of users per page
 $page = isset($_GET['page']) && is_numeric($_GET['page']) ? (int)$_GET['page'] : 1;
 $offset = ($page - 1) * $limit;
 
@@ -156,15 +156,17 @@ try {
          . " LIMIT :limit OFFSET :offset";
 
     $stmt = $pdo->prepare($sql);
+    $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
 
-    // Combine all parameters, including limit and offset, into one array
-    $allParams = array_merge($whereParams, [
-        ':limit' => $limit,
-        ':offset' => $offset
-    ]);
-
-    $stmt->execute($allParams); // Pass all parameters in one go
+    // Bind where parameters
+    foreach ($whereParams as $key => &$val) {
+        $stmt->bindParam($key, $val);
+    }
+    
+    $stmt->execute();
     $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
 } catch (PDOException $e) {
     error_log("Database error fetching users: " . $e->getMessage());
     $_SESSION['message'] = '<div class="alert alert-error"><i class="fas fa-exclamation-circle mr-2"></i> Error fetching users.</div>';
@@ -267,8 +269,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <title><?= htmlspecialchars($pageTitle) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link href="https-fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https-cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         /* This hides elements until Alpine.js initializes, preventing FOUC (Flash Of Unstyled Content) */
         [x-cloak] { display: none !important; }
@@ -315,25 +317,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             color: #0369a1;
         }
 
-        /* Table specific styles for responsiveness */
-        .table-header {
-            cursor: pointer;
-            position: relative;
-            padding-right: 20px; /* Space for sort icon */
-        }
-        .table-header .sort-icon {
-            position: absolute;
-            right: 0;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 0.8em;
-            opacity: 0.4;
-        }
-        .table-header.active .sort-icon {
-            opacity: 1;
-            color: #3b82f6; /* Blue for active sort */
-        }
-
         /* Form input consistency */
         .form-input {
             width: 100%;
@@ -350,18 +333,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
         }
 
-        /* Removed .table-auto-hide-sm as all columns will be visible */
+        /* Custom styles for responsive table */
+        @media (max-width: 767px) {
+            .responsive-table thead {
+                display: none;
+            }
+            .responsive-table, .responsive-table tbody {
+                display: block;
+                width: 100%;
+            }
+            .responsive-table tr {
+                display: flex;
+                flex-direction: column;
+                margin-bottom: 1rem;
+                border: 1px solid #e5e7eb;
+                border-radius: 0.5rem;
+                overflow: hidden;
+                box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            }
+            .responsive-table td {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                text-align: right;
+                padding: 0.75rem 1rem;
+                border-bottom: 1px solid #e5e7eb;
+                order: 1; /* Default order for all cells */
+            }
+            .responsive-table td:last-child {
+                border-bottom: 0;
+            }
+            .responsive-table td::before {
+                content: attr(data-label);
+                font-weight: 600;
+                text-align: left;
+                padding-right: 1rem;
+                color: #374151;
+            }
+             .responsive-table td.mobile-first {
+                order: -1; /* This will move the element with this class to the top */
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-50" x-cloak>
 
 <?php require_once BASE_PATH . '/layout/headersidebar.php'; // Includes your header and sidebar ?>
 
-<main class="p-[20px] md:py-6 md:px-4 md:ml-64">
-    <div class="max-w-full mx-auto py-0">
+<main class="md:ml-0 p-4 sm:p-6 lg:p-0">
+    <div class="max-w-7xl mx-auto py-0">
         <?php
         // Centralized function to display session messages
-        // This function could be in a separate includes/helpers.php file
         function display_session_message() {
             if (isset($_SESSION['message'])) {
                 echo $_SESSION['message'];
@@ -371,225 +393,103 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         display_session_message();
         ?>
 
-        <div class="bg-white rounded-xl shadow-md overflow-hidden p-6">
-            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
+        <div class="bg-white shadow-md overflow-hidden p-4 sm:p-6">
+             <div class="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
                 <div class="flex items-center gap-3">
-                    <i class="fas fa-users-cog text-2xl text-blue-600"></i>
-                    <h1 class="text-2xl font-semibold text-gray-800">User Management</h1>
+                    <i class="fas fa-users-cog text-3xl text-indigo-800"></i>
+                    <h2 class="text-2xl font-bold text-gray-800">Manage Users</h2>
                 </div>
-                <!-- This button's width adapts to full width on small screens and auto on larger -->
-                <a href="/users/create_user.php" class="w-full sm:w-auto inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition duration-300 justify-center">
-                    <i class="fas fa-plus mr-2"></i> Create New User
-                </a>
-            </div>
+                <div class="flex flex-col sm:flex-row items-center gap-2 w-full md:w-auto">
+                    <!-- Search Form -->
+                    <form method="GET" class="flex items-stretch rounded-lg border border-slate-300 overflow-hidden w-full sm:w-auto">
+                        <div class="relative flex-1">
+                            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                            <input type="text" name="search" placeholder="Search..."
+                                   class="w-full pl-10 pr-3 py-2 text-sm bg-white focus:outline-none border-0"
+                                   value="<?= htmlspecialchars($search ?? '') ?>">
+                        </div>
 
-            <form method="GET" class="mb-6 bg-gray-50 p-4 rounded-lg shadow-sm">
-                <!-- Grid layout for filters: single column on small, 3 columns on medium screens and up -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                        <label for="search" class="block text-sm font-medium text-gray-700 mb-1">Search</label>
-                        <input type="text" name="search" id="search" placeholder="Search by name, email, username..."
-                               class="form-input" value="<?= htmlspecialchars($search) ?>">
-                    </div>
-                    <div>
-                        <label for="role" class="block text-sm font-medium text-gray-700 mb-1">Filter by Role</label>
-                        <select name="role" id="role" class="form-input">
-                            <option value="">All Roles</option>
-                            <?php foreach ($allowedRoles as $roleOption): ?>
-                                <option value="<?= htmlspecialchars($roleOption) ?>"
-                                    <?= ($roleFilter === $roleOption) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($roleOption) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="status" class="block text-sm font-medium text-gray-700 mb-1">Filter by Status</label>
-                        <select name="status" id="status" class="form-input">
-                            <option value="">All Statuses</option>
-                            <?php foreach ($allowedStatuses as $statusOption): ?>
-                                <option value="<?= htmlspecialchars($statusOption) ?>"
-                                    <?= ($statusFilter === $statusOption) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars(ucfirst($statusOption)) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                </div>
-                <div class="mt-4 flex flex-col sm:flex-row items-end gap-3 sm:justify-end">
-                    <button type="submit" class="w-full sm:w-auto bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition duration-300 flex items-center justify-center">
-                        <i class="fas fa-filter mr-2"></i> Apply Filters
-                    </button>
-                    <!-- Reset Filter Button -->
-                    <a href="/users/user_management.php" class="w-full sm:w-auto bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-4 rounded-lg transition duration-300 flex items-center justify-center">
-                        <i class="fas fa-sync-alt mr-2"></i> Reset Filters
+                        <?php if (!empty($search)): ?>
+                            <a href="/users/user_management.php" class="flex items-center justify-center px-4 py-2 bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 transition-colors text-sm flex-shrink-0">
+                                <i class="fas fa-times text-base mr-2"></i>
+                                <span class="hidden sm:inline">Reset</span>
+                            </a>
+                        <?php else: ?>
+                            <button type="submit"
+                                    class="flex items-center justify-center px-4 bg-indigo-900 text-white hover:bg-indigo-800 transition-colors">
+                                <i class="fas fa-arrow-right"></i>
+                            </button>
+                        <?php endif; ?>
+                    </form>
+
+                    <!-- Add New User Button -->
+                    <a href="/users/create_user.php"
+                       class="inline-flex items-center justify-center px-4 py-2 bg-indigo-900 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-indigo-800 transition-all duration-300 whitespace-nowrap w-full sm:w-auto">
+                        <i class="fas fa-plus mr-2"></i> Add New User
                     </a>
                 </div>
-            </form>
+            </div>
 
             <?php if (empty($users)): ?>
-                <div class="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-center">
-                    <i class="fas fa-info-circle mr-2"></i> No users found matching your criteria.
+                <div class="bg-blue-50 border border-blue-200 text-blue-800 p-5 rounded-lg text-center shadow-inner">
+                    <i class="fas fa-info-circle text-3xl text-blue-500 mb-2"></i>
+                    <p class="text-base font-medium">No users found matching your criteria.</p>
                 </div>
             <?php else: ?>
-                <!-- Overflow-x-auto makes the table horizontally scrollable on small screens -->
-                <div class="overflow-x-auto rounded-lg shadow-sm border border-gray-200">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full border-collapse responsive-table">
+                        <thead class="bg-purple-100">
                             <tr>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=user_id&sort_order=<?= ($sortBy === 'user_id' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'user_id') ? 'active' : '' ?>">
-                                        User ID
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'user_id'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
+                                 <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">
+                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=user_id&sort_order=<?= ($sortBy === 'user_id' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>" class="inline-flex items-center">ID<span class="ml-1"><?php if ($sortBy === 'user_id'): ?><i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i><?php else: ?><i class="fas fa-sort text-gray-400"></i><?php endif; ?></span></a>
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=username&sort_order=<?= ($sortBy === 'username' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'username') ? 'active' : '' ?>">
-                                        Username
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'username'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
+                                <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">
+                                     <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=username&sort_order=<?= ($sortBy === 'username' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>" class="inline-flex items-center">Username<span class="ml-1"><?php if ($sortBy === 'username'): ?><i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i><?php else: ?><i class="fas fa-sort text-gray-400"></i><?php endif; ?></span></a>
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=email&sort_order=<?= ($sortBy === 'email' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'email') ? 'active' : '' ?>">
-                                        Email
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'email'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
+                                <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">
+                                     <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=email&sort_order=<?= ($sortBy === 'email' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>" class="inline-flex items-center">Email<span class="ml-1"><?php if ($sortBy === 'email'): ?><i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i><?php else: ?><i class="fas fa-sort text-gray-400"></i><?php endif; ?></span></a>
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=displayname&sort_order=<?= ($sortBy === 'displayname' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'displayname') ? 'active' : '' ?>">
-                                        Display Name
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'displayname'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
+                                <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">
+                                     <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=user_role&sort_order=<?= ($sortBy === 'user_role' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>" class="inline-flex items-center">Role<span class="ml-1"><?php if ($sortBy === 'user_role'): ?><i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i><?php else: ?><i class="fas fa-sort text-gray-400"></i><?php endif; ?></span></a>
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=user_role&sort_order=<?= ($sortBy === 'user_role' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'user_role') ? 'active' : '' ?>">
-                                        Role
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'user_role'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
+                                <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">
+                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=status&sort_order=<?= ($sortBy === 'status' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>" class="inline-flex items-center">Status<span class="ml-1"><?php if ($sortBy === 'status'): ?><i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i><?php else: ?><i class="fas fa-sort text-gray-400"></i><?php endif; ?></span></a>
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=status&sort_order=<?= ($sortBy === 'status' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'status') ? 'active' : '' ?>">
-                                        Status
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'status'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
+                                <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">
+                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=created_at&sort_order=<?= ($sortBy === 'created_at' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>" class="inline-flex items-center">Created<span class="ml-1"><?php if ($sortBy === 'created_at'): ?><i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i><?php else: ?><i class="fas fa-sort text-gray-400"></i><?php endif; ?></span></a>
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    <a href="?search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=created_at&sort_order=<?= ($sortBy === 'created_at' && $sortOrder === 'ASC') ? 'DESC' : 'ASC' ?>"
-                                       class="flex items-center whitespace-nowrap table-header <?= ($sortBy === 'created_at') ? 'active' : '' ?>">
-                                        Created At
-                                        <span class="sort-icon">
-                                            <?php if ($sortBy === 'created_at'): ?>
-                                                <i class="fas fa-arrow-<?= ($sortOrder === 'ASC') ? 'up' : 'down' ?>"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-sort"></i>
-                                            <?php endif; ?>
-                                        </span>
-                                    </a>
-                                </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                <th scope="col" class="px-6 py-3 text-left text-sm font-semibold text-purple-800 uppercase tracking-wider border border-gray-200">Actions</th>
                             </tr>
                         </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
+                        <tbody class="bg-white">
                             <?php foreach ($users as $user): ?>
                                 <tr>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($user['user_id']) ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($user['username']) ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($user['email']) ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($user['displayname'] ?? 'N/A') ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($user['user_role']) ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
+                                    <td data-label="ID" class="px-6 py-2 whitespace-nowrap text-sm font-medium text-gray-900 border border-gray-200 md:bg-transparent bg-gray-100"><?= htmlspecialchars($user['user_id']) ?></td>
+                                    <td data-label="Username" class="mobile-first px-6 py-2 whitespace-nowrap text-sm font-medium text-gray-900 border border-gray-200 md:bg-transparent bg-indigo-200"><?= htmlspecialchars($user['username']) ?></td>
+                                    <td data-label="Email" class="px-6 py-2 whitespace-nowrap text-sm text-gray-500 border border-gray-200 md:bg-transparent bg-gray-100"><?= htmlspecialchars($user['email']) ?></td>
+                                    <td data-label="Role" class="px-6 py-2 whitespace-nowrap text-sm text-gray-500 border border-gray-200 md:bg-transparent bg-gray-100"><?= htmlspecialchars($user['user_role']) ?></td>
+                                    <td data-label="Status" class="px-6 py-2 whitespace-nowrap text-sm text-gray-500 capitalize border border-gray-200 md:bg-transparent bg-gray-100">
                                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
                                             <?php
-                                            // Status badge styling
                                             if ($user['status'] == 'active') echo 'bg-green-100 text-green-800';
-                                            else if ($user['status'] == 'inactive') echo 'bg-red-100 text-red-800';
-                                            else if ($user['status'] == 'pending') echo 'bg-yellow-100 text-yellow-800';
-                                            else if ($user['status'] == 'suspended') echo 'bg-orange-100 text-orange-800';
-                                            else if ($user['status'] == 'locked') echo 'bg-purple-100 text-purple-800';
-                                            else echo 'bg-gray-100 text-gray-800'; // Default for unknown status
+                                            elseif ($user['status'] == 'inactive') echo 'bg-red-100 text-red-800';
+                                            elseif ($user['status'] == 'pending') echo 'bg-yellow-100 text-yellow-800';
+                                            elseif ($user['status'] == 'suspended') echo 'bg-orange-100 text-orange-800';
+                                            elseif ($user['status'] == 'locked') echo 'bg-purple-100 text-purple-800';
+                                            else echo 'bg-gray-100 text-gray-800';
                                             ?>">
                                             <?= htmlspecialchars(ucfirst($user['status'])) ?>
                                         </span>
                                     </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?= date('Y-m-d H:i', strtotime($user['created_at'])) ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-left text-sm font-medium">
-                                        <!-- action-buttons-wrapper stacks action buttons vertically on small screens -->
-                                        <div class="flex items-center space-x-2 action-buttons-wrapper">
-                                            <!-- View User Button -->
-                                            <button type="button"
-                                                @click="viewModalOpen = true; viewedUser = <?= htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>;"
-                                                class="text-blue-600 hover:text-blue-900" title="View User">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <a href="/users/edit_user.php?id=<?= $user['user_id'] ?>" class="text-indigo-600 hover:text-indigo-900" title="Edit User">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <?php
-                                            // Only SuperAdmin can delete SuperAdmin accounts
-                                            // An Admin cannot delete a SuperAdmin account
-                                            $canDelete = true;
-                                            if ($user['user_role'] === 'SuperAdmin' && $userRole === 'Admin') {
-                                                $canDelete = false; // Admin cannot delete SuperAdmin
-                                            }
-                                            // User cannot delete their own account
-                                            if ((int)$user['user_id'] === (int)$_SESSION['user_id']) {
-                                                $canDelete = false;
-                                            }
-
-                                            if ($canDelete):
-                                            ?>
-                                            <!-- Updated delete button to open modal -->
-                                            <button type="button"
-                                                @click="deleteModalOpen = true; userToDeleteId = <?= $user['user_id'] ?>; userToDeleteUsername = '<?= htmlspecialchars($user['username'], ENT_QUOTES, 'UTF-8') ?>'; deleteConfirmationInput = ''; deleteError = ''; $nextTick(() => $refs.deleteConfirmationInput.focus());"
-                                                class="text-red-600 hover:text-red-900" title="Delete User">
-                                                <i class="fas fa-trash-alt"></i>
-                                            </button>
+                                    <td data-label="Created" class="px-6 py-2 whitespace-nowrap text-sm text-gray-500 border border-gray-200 md:bg-transparent bg-gray-100"><?= date('M d, Y', strtotime($user['created_at'])) ?></td>
+                                    <td data-label="Actions" class="px-6 py-2 whitespace-nowrap text-left text-sm font-medium border border-gray-200 md:bg-transparent bg-indigo-100">
+                                        <div class="flex items-center justify-end flex-nowrap gap-2">
+                                            <button @click="viewModalOpen = true; viewedUser = <?= htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>;" class="inline-flex items-center px-2 py-1 bg-indigo-900 text-white text-xs font-bold rounded-md hover:bg-indigo-800 transform hover:scale-120 transition-all duration-200" title="View User"><i class="fas fa-eye mr-1"></i> View</button>
+                                            <a href="/users/edit_user.php?id=<?= $user['user_id'] ?>" class="inline-flex items-center px-2 py-1 bg-orange-600 text-white text-xs font-bold rounded-md hover:bg-orange-700 transform hover:scale-120 transition-all duration-200" title="Edit User"><i class="fas fa-edit mr-1"></i> Edit</a>
+                                            <?php if (!($user['user_role'] === 'SuperAdmin' && $userRole === 'Admin') && ((int)$user['user_id'] !== (int)$_SESSION['user_id'])): ?>
+                                                <button type="button" @click="deleteModalOpen = true; userToDeleteId = <?= $user['user_id'] ?>; userToDeleteUsername = '<?= htmlspecialchars($user['username'], ENT_QUOTES, 'UTF-8') ?>';" class="inline-flex items-center px-2 py-1 bg-red-600 text-white text-xs font-bold rounded-md hover:bg-red-700 transform hover:scale-120 transition-all duration-200" title="Delete User"><i class="fas fa-trash-alt mr-1"></i> Delete</button>
                                             <?php else: ?>
-                                                <span class="text-gray-400 cursor-not-allowed" title="Cannot delete this user">
-                                                    <i class="fas fa-trash-alt"></i>
-                                                </span>
+                                                <button class="inline-flex items-center px-2 py-1 bg-gray-300 text-white text-xs font-bold rounded-md cursor-not-allowed" title="Cannot delete this user" disabled><i class="fas fa-trash-alt mr-1"></i> Delete</button>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -599,19 +499,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     </table>
                 </div>
 
-                <nav class="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
-                    <!-- Pagination navigation for small screens, hidden on larger -->
-                    <div class="flex-1 flex justify-between sm:hidden">
-                        <a href="?page=<?= max(1, $page - 1) ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>"
-                           class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-                            Previous
-                        </a>
-                        <a href="?page=<?= min($totalPages, $page + 1) ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>"
-                           class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-                            Next
-                        </a>
-                    </div>
-                    <!-- Pagination navigation for larger screens, hidden on small -->
+                <?php if ($totalPages > 1): ?>
+                <div class="mt-6">
+                    <!-- Desktop Pagination -->
                     <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                         <div>
                             <p class="text-sm text-gray-700">
@@ -623,135 +513,155 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         <div>
                             <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                                 <?php if ($page > 1): ?>
-                                    <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>"
-                                       class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
-                                        <span class="sr-only">Previous</span>
-                                        <i class="fas fa-chevron-left h-5 w-5"></i>
-                                    </a>
+                                    <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center justify-center w-10 h-10 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"><i class="fas fa-chevron-left"></i></a>
                                 <?php endif; ?>
-
                                 <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                                    <a href="?page=<?= $i ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>"
-                                       class="<?= $i === $page ? 'z-10 bg-blue-50 border-blue-500 text-blue-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium">
-                                        <?= $i ?>
-                                    </a>
+                                    <a href="?page=<?= $i ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="<?= $i === $page ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center justify-center w-10 h-10 border text-sm font-medium"><?= $i ?></a>
                                 <?php endfor; ?>
-
                                 <?php if ($page < $totalPages): ?>
-                                    <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>"
-                                       class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
-                                        <span class="sr-only">Next</span>
-                                        <i class="fas fa-chevron-right h-5 w-5"></i>
-                                    </a>
+                                    <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center justify-center w-10 h-10 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"><i class="fas fa-chevron-right"></i></a>
                                 <?php endif; ?>
                             </nav>
                         </div>
                     </div>
-                </nav>
+                    <!-- Mobile Pagination -->
+                    <div class="sm:hidden flex items-center justify-between">
+                        <?php if ($page > 1): ?>
+                            <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">Previous</a>
+                        <?php endif; ?>
+                        <span class="text-sm text-gray-700">Page <?= $page ?> of <?= $totalPages ?></span>
+                        <?php if ($page < $totalPages): ?>
+                            <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">Next</a>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
     </div>
 </main>
 
+<!-- Modals -->
 <!-- Delete Confirmation Modal -->
-<div class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+<div class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-50"
      x-show="deleteModalOpen"
      x-transition:enter="ease-out duration-300"
-     x-transition:enter-start="opacity-0 scale-95"
-     x-transition:enter-end="opacity-100 scale-100"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
      x-transition:leave="ease-in duration-200"
-     x-transition:leave-start="opacity-100 scale-100"
-     x-transition:leave-end="opacity-0 scale-95"
-     @click.away="deleteModalOpen = false; deleteError = ''; deleteConfirmationInput = '';">
-    <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" aria-hidden="true"></div>
-    <div class="bg-white rounded-lg p-6 max-w-sm w-full shadow-xl relative z-10 sm:max-w-md">
-        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4" id="modal-title">Confirm Deletion</h3>
-        <div class="mt-2">
-            <p class="text-sm text-gray-700">
-                You are about to permanently delete user "<strong x-text="userToDeleteUsername"></strong>". This action cannot be undone.
-            </p>
-            <p class="text-sm text-gray-700 mt-2">
-                Please type "<strong>delete</strong>" in the box below to confirm.
-            </p>
-            <input type="text" x-model="deleteConfirmationInput" x-ref="deleteConfirmationInput"
-                   class="mt-3 block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
-                   :class="deleteConfirmationInput === 'delete' ? 'border-green-500' : 'border-gray-300'"
-                   placeholder="type 'delete' to confirm"
-                   @keyup.enter="
-                       if (deleteConfirmationInput === 'delete') {
-                           document.getElementById('deleteUserForm').submit();
-                       } else {
-                           // Fixed: Used HTML entity for double quotes to prevent parsing errors
-                           deleteError = 'Please type &quot;delete&quot; to confirm.';
-                       }
-                   ">
-            <p x-show="deleteError" x-text="deleteError" class="text-red-600 text-xs mt-1 font-semibold"></p>
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     @keydown.escape.window="deleteModalOpen = false">
+    <div class="bg-white rounded-xl p-6 shadow-2xl max-w-sm w-full transform transition-all" @click.away="deleteModalOpen = false">
+        <div class="flex items-center justify-center mb-3">
+            <div class="bg-red-100 text-red-600 p-3 rounded-full flex items-center justify-center w-12 h-12">
+                <i class="fas fa-trash-alt text-2xl"></i>
+            </div>
         </div>
-        <div class="mt-4 flex flex-col sm:flex-row-reverse justify-end gap-3">
-            <form id="deleteUserForm" method="POST" action="/users/user_management.php" class="w-full sm:w-auto">
-                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-                <input type="hidden" name="action" value="delete_user">
-                <input type="hidden" name="user_id" x-model="userToDeleteId">
-                <input type="hidden" name="username_to_delete" x-model="userToDeleteUsername">
-                <button type="button"
-                        @click="
-                            if (deleteConfirmationInput === 'delete') {
-                                $el.closest('form').submit();
-                            } else if (deleteConfirmationInput === '') {
-                                // Fixed: Used HTML entity for double quotes to prevent parsing errors
-                                deleteError = 'Please type &quot;delete&quot; to confirm and proceed.';
-                            } else {
-                                // Fixed: Used HTML entity for double quotes to prevent parsing errors
-                                deleteError = 'Incorrect. Please type &quot;delete&quot; exactly to confirm.';
-                            }
-                        "
-                        class="inline-flex justify-center w-full sm:w-auto py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200">
-                    Delete User
-                </button>
-            </form>
-            <button type="button"
-                    @click="deleteModalOpen = false; deleteError = ''; deleteConfirmationInput = '';"
-                    class="inline-flex justify-center w-full sm:w-auto py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200">
-                Cancel
-            </button>
-        </div>
+        <h3 class="text-xl font-bold text-slate-800 text-center mb-1">Confirm Deletion</h3>
+        <p class="text-center text-slate-500 text-sm mb-4">You are about to permanently delete user "<strong x-text="userToDeleteUsername"></strong>". This action cannot be undone. Please type "<strong>delete</strong>" to confirm.</p>
+        <form id="deleteUserForm" method="POST" action="/users/user_management.php">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+            <input type="hidden" name="action" value="delete_user">
+            <input type="hidden" name="user_id" x-model="userToDeleteId">
+            <input type="hidden" name="username_to_delete" x-model="userToDeleteUsername">
+            <div class="mb-3">
+                <input type="text" x-model="deleteConfirmationInput" x-ref="deleteConfirmInput" class="w-full px-3 py-2 text-sm border rounded-md focus:ring-1 focus:ring-red-400 focus:border-red-400 focus:outline-none transition" :class="deleteConfirmationInput === 'delete' ? 'border-green-500' : 'border-slate-300'" placeholder="type 'delete' to confirm">
+                <p x-show="deleteError" x-text="deleteError" class="text-red-600 text-xs mt-1 font-semibold"></p>
+            </div>
+            <div class="flex gap-3">
+                <button type="button" @click="deleteModalOpen = false; deleteError = ''; deleteConfirmationInput = '';" class="flex-1 px-4 py-2 bg-slate-200 text-slate-700 font-semibold rounded-md hover:bg-slate-300 transition text-sm">Cancel</button>
+                <button type="button" @click="if (deleteConfirmationInput === 'delete') { $el.closest('form').submit(); } else { deleteError = 'Incorrect confirmation text.'; }" class="flex-1 px-4 py-2 bg-red-600 text-white font-semibold rounded-md hover:bg-red-700 transition text-sm">Delete User</button>
+            </div>
+        </form>
     </div>
 </div>
 
 <!-- View User Details Modal -->
-<div class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+<div class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black bg-opacity-50"
      x-show="viewModalOpen"
      x-transition:enter="ease-out duration-300"
-     x-transition:enter-start="opacity-0 scale-95"
-     x-transition:enter-end="opacity-100 scale-100"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
      x-transition:leave="ease-in duration-200"
-     x-transition:leave-start="opacity-100 scale-100"
-     x-transition:leave-end="opacity-0 scale-95"
-     @click.away="viewModalOpen = false; viewedUser = {};">
-    <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" aria-hidden="true"></div>
-    <div class="bg-white rounded-lg p-6 max-w-sm w-full shadow-xl relative z-10 sm:max-w-md">
-        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4" id="view-modal-title">User Details</h3>
-        <div class="mt-2 text-gray-700 space-y-2">
-            <p><strong>User ID:</strong> <span x-text="viewedUser.user_id"></span></p>
-            <p><strong>Username:</strong> <span x-text="viewedUser.username"></span></p>
-            <p><strong>Email:</strong> <span x-text="viewedUser.email"></span></p>
-            <p x-show="viewedUser.first_name"><strong>First Name:</strong> <span x-text="viewedUser.first_name"></span></p>
-            <p x-show="viewedUser.last_name"><strong>Last Name:</strong> <span x-text="viewedUser.last_name"></span></p>
-            <p x-show="viewedUser.displayname"><strong>Display Name:</strong> <span x-text="viewedUser.displayname"></span></p>
-            <p x-show="viewedUser.phone_number"><strong>Phone Number:</strong> <span x-text="viewedUser.phone_number"></span></p>
-            <p><strong>Role:</strong> <span x-text="viewedUser.user_role"></span></p>
-            <p><strong>Status:</strong> <span x-text="viewedUser.status"></span></p>
-            <p><strong>Created At:</strong> <span x-text="new Date(viewedUser.created_at).toLocaleString()"></span></p>
-            <!-- Password field intentionally omitted for security reasons. Passwords should only be stored as hashes and never displayed. -->
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     @keydown.escape.window="viewModalOpen = false">
+    <div class="bg-white rounded-xl p-4 sm:p-6 shadow-2xl max-w-md w-full transform transition-all" @click.away="viewModalOpen = false">
+        <div class="flex items-center justify-center mb-3">
+            <div class="bg-indigo-100 text-indigo-600 p-3 rounded-full flex items-center justify-center w-12 h-12">
+                <i class="fas fa-user-circle text-2xl"></i>
+            </div>
         </div>
-        <div class="mt-6 flex justify-end">
-            <button type="button"
-                    @click="viewModalOpen = false; viewedUser = {};"
-                    class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                Close
-            </button>
+        <h3 class="text-xl font-bold text-slate-800 text-center mb-1">User Details</h3>
+        <p class="text-center text-slate-500 text-sm mb-4" x-text="'Details for ' + viewedUser.username"></p>
+        <hr class="border-gray-200 my-4">
+        
+        <!-- Responsive Details List -->
+        <div class="mt-4 space-y-3 text-sm">
+            <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                <span class="font-semibold text-gray-600">User ID:</span>
+                <span class="text-gray-800 text-right" x-text="viewedUser.user_id"></span>
+            </div>
+            <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                <span class="font-semibold text-gray-600">Username:</span>
+                <span class="text-gray-800 text-right break-all" x-text="viewedUser.username"></span>
+            </div>
+            <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                <span class="font-semibold text-gray-600">Email:</span>
+                <span class="text-gray-800 text-right break-all" x-text="viewedUser.email"></span>
+            </div>
+            <template x-if="viewedUser.first_name">
+                <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                    <span class="font-semibold text-gray-600">First Name:</span>
+                    <span class="text-gray-800 text-right break-all" x-text="viewedUser.first_name"></span>
+                </div>
+            </template>
+            <template x-if="viewedUser.last_name">
+                <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                    <span class="font-semibold text-gray-600">Last Name:</span>
+                    <span class="text-gray-800 text-right break-all" x-text="viewedUser.last_name"></span>
+                </div>
+            </template>
+            <template x-if="viewedUser.displayname">
+                <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                    <span class="font-semibold text-gray-600">Display Name:</span>
+                    <span class="text-gray-800 text-right break-all" x-text="viewedUser.displayname"></span>
+                </div>
+            </template>
+            <template x-if="viewedUser.phone_number">
+                <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                    <span class="font-semibold text-gray-600">Phone:</span>
+                    <span class="text-gray-800 text-right break-all" x-text="viewedUser.phone_number"></span>
+                </div>
+            </template>
+            <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                <span class="font-semibold text-gray-600">Role:</span>
+                <span class="text-gray-800 text-right" x-text="viewedUser.user_role"></span>
+            </div>
+            <div class="flex justify-between items-start gap-4 border-b border-gray-100 pb-2">
+                <span class="font-semibold text-gray-600">Status:</span>
+                <span class="capitalize px-2 inline-flex text-xs leading-5 font-semibold rounded-full" :class="{
+                    'bg-green-100 text-green-800': viewedUser.status == 'active',
+                    'bg-red-100 text-red-800': viewedUser.status == 'inactive',
+                    'bg-yellow-100 text-yellow-800': viewedUser.status == 'pending',
+                    'bg-orange-100 text-orange-800': viewedUser.status == 'suspended',
+                    'bg-purple-100 text-purple-800': viewedUser.status == 'locked'
+                }" x-text="viewedUser.status"></span>
+            </div>
+             <div class="flex justify-between items-start gap-4 pb-2">
+                <span class="font-semibold text-gray-600">Created At:</span>
+                <span class="text-gray-800 text-right" x-text="new Date(viewedUser.created_at).toLocaleString()"></span>
+            </div>
+        </div>
+        
+        <div class="mt-6 flex items-center gap-3">
+            <button type="button" @click="viewModalOpen = false; deleteModalOpen = true; userToDeleteId = viewedUser.user_id; userToDeleteUsername = viewedUser.username;" class="flex-1 justify-center inline-flex px-4 py-2 bg-red-600 text-white font-semibold rounded-md hover:bg-red-700 transition text-sm">Delete</button>
+            <a x-bind:href="'/users/edit_user.php?id=' + viewedUser.user_id" class="flex-1 justify-center inline-flex px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition text-sm">Edit</a>
+            <button type="button" @click="viewModalOpen = false; viewedUser = {};" class="flex-1 justify-center inline-flex px-4 py-2 bg-slate-200 text-slate-700 font-semibold rounded-md hover:bg-slate-300 transition text-sm">Close</button>
         </div>
     </div>
 </div>
+
 </body>
 </html>
