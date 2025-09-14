@@ -1,0 +1,28 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+error_log
+
+# Cache
+cache/
+tmp/
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# Vendor (if composer)
+vendor/
+
+# Node modules (if JS present)
+node_modules/
+
+#zip
+sss.zip
+
+#uploads
+uploads/

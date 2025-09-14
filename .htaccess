@@ -1,0 +1,38 @@
+RewriteEngine On
+
+# Pages
+RewriteRule ^about-us$ /pages/about-us.php [L]
+RewriteRule ^contact-us$ /pages/contact-us.php [L]
+RewriteRule ^privacy-policies$ /pages/privacy-policies.php [L]
+RewriteRule ^terms-conditions$ /pages/terms-conditions.php [L]
+RewriteRule ^pages$ /pages/pages.php [L]
+
+# Auth
+RewriteRule ^login$ /users/login.php [L]
+RewriteRule ^logout$ /users/logout.php [L]
+
+# Dashboard
+RewriteRule ^dashboard$ /editions/dashboard.php [L]
+
+# Editions
+RewriteRule ^upload-edition$ /editions/upload-edition.php [L]
+RewriteRule ^manage-editions$ /editions/manage-editions.php [L]
+RewriteRule ^categories$ /editions/categories.php [L]
+RewriteRule ^list-editions$ /editions/list-editions.php [L]
+
+# Users
+RewriteRule ^add-user$ /users/create_user.php [L]
+RewriteRule ^user-management$ /users/user_management.php [L]
+
+# Settings
+RewriteRule ^theme$ /settings/theme.php [L]
+RewriteRule ^logos-settings$ /settings/logos-settings.php [L]
+RewriteRule ^social-media-settings$ /settings/social-media-settings.php [L]
+RewriteRule ^website-settings$ /settings/website-settings.php [L]
+RewriteRule ^edit-user$ /users/edit_user.php [L]
+
+# Sitemap
+RewriteRule ^sitemap\.xml$ /sitemaps/sitemap.php [L]
+RewriteRule ^sitemaps/page-sitemap\.xml$ /sitemaps/page-sitemap.php [L]
+RewriteRule ^sitemaps/editions-sitemap\.xml$ /sitemaps/editions-sitemap.php [L]
+RewriteRule ^sitemaps/category-sitemap\.xml$ /sitemaps/category-sitemap.php [L]
