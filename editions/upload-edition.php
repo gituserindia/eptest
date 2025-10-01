@@ -14,10 +14,15 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Include database configuration
-// Assuming config.php is in a 'config' directory one level up from the current script.
-// For example, if upload-edition.php is in /public_html/editions/, and config.php is in /public_html/config/
-require_once __DIR__ . '/../config/config.php';
+// Ensure BASE_PATH is defined using realpath for a clean, absolute path
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', realpath(__DIR__ . '/..'));
+}
+
+// Include database configuration and variables
+require_once BASE_PATH . '/config/config.php';
+require_once BASE_PATH . '/vars/logovars.php';
+
 
 // Set default timezone to Asia/Kolkata (IST) for consistent date/time handling
 date_default_timezone_set('Asia/Kolkata');
@@ -36,7 +41,7 @@ if ($loggedIn && !isset($_SESSION['remember_me'])) {
         session_destroy();
         session_start();
         $_SESSION['message'] = '<div class="alert alert-error"><i class="fas fa-hourglass-end mr-2"></i> Session expired due to inactivity. Please log in again.</div>';
-        header("Location: login.php?timeout=1");
+        header("Location: /login?timeout=1");
         exit;
     }
     $_SESSION['last_activity'] = time();
@@ -45,27 +50,28 @@ if ($loggedIn && !isset($_SESSION['remember_me'])) {
 // --- INITIAL AUTHORIZATION CHECKS ---
 if (!$loggedIn) {
     $_SESSION['message'] = '<div class="alert alert-info"><i class="fas fa-info-circle mr-2"></i> Please log in to access this page.</div>';
-    header("Location: login.php");
+    header("Location: /login");
     exit;
 }
 
 if ($userRole !== 'SuperAdmin' && $userRole !== 'Admin') {
     $_SESSION['message'] = '<div class="alert alert-error"><i class="fas fa-lock mr-2"></i> You do not have the required permissions to access this page.</div>';
-    header("Location: dashboard.php"); // Redirect to a page they can access
+    header("Location: /dashboard"); // Redirect to a page they can access
     exit;
 }
 
 $pageTitle = "Upload New Edition";
 
-// Fetch categories for the dropdown
+// Fetch categories for the dropdown, ordered by default, then featured, then name
 $categories = [];
 try {
-    $stmt = $pdo->query("SELECT category_id, name FROM categories ORDER BY name ASC");
+    $stmt = $pdo->query("SELECT category_id, name, is_default, is_featured FROM categories ORDER BY is_default DESC, is_featured DESC, name ASC");
     $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     error_log("Database error fetching categories: " . $e->getMessage());
     $_SESSION['message'] = '<div class="alert alert-error"><i class="fas fa-exclamation-circle mr-2"></i> Error loading categories.</div>';
 }
+
 
 // Function to display session messages
 if (!function_exists('display_session_message')) {
@@ -78,42 +84,58 @@ if (!function_exists('display_session_message')) {
 }
 
 // --- Configuration for ImageMagick and Thumbnail Sizes ---
-// IMPORTANT: VERIFY THESE PATHS ON YOUR SERVER!
-// Configuration set for LINUX (common paths)
-// These constants are moved to the global scope to avoid PHP Parse errors.
-const GS_BIN_DIR = '/usr/bin'; // Common path for Ghostscript executables (gs, gsutil etc.)
-const IMAGEMAGICK_HOME_DIR = '/usr'; // Common ImageMagick install root (where policies.xml might be)
-const MAGICK_EXE_PATH = '/usr/bin/convert'; // Use 'convert' command if 'magick' is not found or preferred for older IM versions.
-
-// Thumbnail sizes
-const OG_THUMB_WIDTH = 1200; // Open Graph optimal width for landscape previews
-const OG_THUMB_HEIGHT = 600; // Optimal height for top-aligned crop
-const LIST_THUMB_HEIGHT = 1200; // Height for list view thumbnail, width will be proportional
-// --- END Configuration for ImageMagick and Thumbnail Sizes ---
-
+const GS_BIN_DIR = '/usr/bin';
+const IMAGEMAGICK_HOME_DIR = '/usr';
+const MAGICK_EXE_PATH = '/usr/bin/convert';
+const OG_THUMB_WIDTH = 1200;
+const OG_THUMB_HEIGHT = 600;
+const LIST_THUMB_HEIGHT = 1200;
 
 // --- Handle Form Submission (AJAX POST) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    header('Content-Type: application/json'); // Ensure JSON response for AJAX
-    ini_set('display_errors', 0); // Hide errors from output for JSON
+    // Simulate processing delay for interactive demo
+    sleep(2);
+
+    header('Content-Type: application/json');
+    ini_set('display_errors', 0);
     error_reporting(E_ALL);
 
     $title = trim($_POST['title'] ?? '');
     $publication_date = trim($_POST['publication_date'] ?? '');
     $category_id = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
     $description = trim($_POST['description'] ?? '');
-    $description = ($description === '') ? null : $description; // Set empty string to null for DB
-    $status = trim($_POST['status'] ?? 'private'); // Default to 'private' if not set
+    $description = ($description === '') ? null : $description;
+    
+    $status = trim($_POST['status'] ?? 'Private');
+    $schedule_date = trim($_POST['schedule_date'] ?? '');
+    $schedule_time = trim($_POST['schedule_time'] ?? '');
+
+    $status_to_save = $status;
+    $status_reason = null;
+
+    if ($status === 'Scheduled') {
+        if (empty($schedule_date) || empty($schedule_time)) {
+            echo json_encode(['success' => false, 'message' => 'Scheduled date and time are required for a scheduled post.']);
+            exit;
+        }
+        $status_to_save = 'Private'; // Store scheduled posts as 'Private'
+        $scheduled_datetime = $schedule_date . ' ' . $schedule_time . ':00';
+        $status_reason = 'Scheduled for ' . date('d-m-Y h:i A', strtotime($scheduled_datetime));
+    } else {
+        if (!in_array($status, ['Published', 'Private'])) {
+            $status_to_save = 'Private'; // Default for security
+        }
+    }
+
 
     $pdf_file = $_FILES['pdf_file'] ?? null;
 
-    // Basic validation
     if (empty($title)) {
         echo json_encode(['success' => false, 'message' => 'Edition title is required.']);
         exit;
     }
     if (empty($publication_date) || !preg_match("/^\d{4}-\d{2}-\d{2}$/", $publication_date)) {
-        echo json_encode(['success' => false, 'message' => 'Publication date is required and must be inYYYY-MM-DD format.']);
+        echo json_encode(['success' => false, 'message' => 'Publication date is required and must be in YYYY-MM-DD format.']);
         exit;
     }
     if ($category_id === null) {
@@ -133,49 +155,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    $pdo->beginTransaction(); // Start transaction
+    $pdo->beginTransaction();
 
     try {
-        // 1. Create unique directory structure based on publication date and unique ID
-        $base_upload_dir = '/../uploads/editions/';
+        // Use DIRECTORY_SEPARATOR for better cross-platform compatibility
+        $ds = DIRECTORY_SEPARATOR;
+        $base_upload_dir_segment = 'uploads' . $ds . 'editions' . $ds;
+        
         $pub_date_obj = DateTime::createFromFormat('Y-m-d', $publication_date);
         $pub_year = $pub_date_obj->format('Y');
         $pub_month = $pub_date_obj->format('m');
-        $pub_date_day = $pub_date_obj->format('d');
+        $pub_day = $pub_date_obj->format('d');
         $current_time_hhmmss = date('His');
 
         $unique_folder_name = "{$publication_date}_{$current_time_hhmmss}_" . uniqid();
-        $date_sub_path = "{$pub_year}/{$pub_month}/{$pub_date_day}/";
-        $full_edition_dir = __DIR__ . '/' . $base_upload_dir . $date_sub_path . $unique_folder_name . '/';
+        $date_sub_path = $pub_year . $ds . $pub_month . $ds . $pub_day . $ds;
+        
+        // Construct a clean, absolute path for the new edition directory
+        $full_edition_dir = BASE_PATH . $ds . $base_upload_dir_segment . $date_sub_path . $unique_folder_name . $ds;
 
-        if (!is_dir($full_edition_dir)) {
-            if (!mkdir($full_edition_dir, 0755, true)) {
-                throw new Exception('Failed to create directory for edition.');
-            }
+        if (!is_dir($full_edition_dir) && !mkdir($full_edition_dir, 0755, true)) {
+            throw new Exception('Failed to create directory for edition.');
         }
 
-        // 2. Move uploaded PDF file
         $pdf_file_name = 'edition-' . $pub_date_obj->format('d-m-Y') . '.pdf';
         $pdf_target_path = $full_edition_dir . $pdf_file_name;
         if (!move_uploaded_file($pdf_file['tmp_name'], $pdf_target_path)) {
             throw new Exception('Failed to move uploaded PDF file.');
         }
-        // Store web-accessible path for database
-        $pdf_web_path = $base_upload_dir . $date_sub_path . $unique_folder_name . '/' . $pdf_file_name;
-        if (!chmod($pdf_target_path, 0644)) {
-            error_log("Failed to set permissions for PDF file: " . $pdf_target_path);
+        
+        // Construct the web-accessible path (uses forward slashes)
+        $pdf_web_path = '/' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/') . $pdf_file_name;
+        chmod($pdf_target_path, 0644);
+
+        $images_dir = $full_edition_dir . 'images' . $ds;
+        if (!is_dir($images_dir) && !mkdir($images_dir, 0755)) {
+            throw new Exception('Failed to create images directory.');
         }
 
-        // 3. Create images subdirectory
-        $images_dir = $full_edition_dir . 'images/';
-        if (!is_dir($images_dir)) {
-            if (!mkdir($images_dir, 0755)) {
-                throw new Exception('Failed to create images directory.');
-            }
-        }
-
-        // 4. Convert PDF to images using ImageMagick (via 'convert' command)
-        // Set environment variables for ImageMagick/Ghostscript
         $original_path = getenv('PATH');
         putenv('PATH=' . GS_BIN_DIR . PATH_SEPARATOR . $original_path);
         putenv('MAGICK_HOME=' . IMAGEMAGICK_HOME_DIR);
@@ -185,22 +202,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $temp_images_pattern = $images_dir . 'temp_raw_%03d.jpg';
         $temp_images_output_escaped = escapeshellarg($temp_images_pattern);
 
-        // Command to extract all pages as raw JPGs
-        // Corrected: $pdf_target_path_escaped is now correctly placed before output options
-        $command = $magick_exe_escaped . ' -density 250 ' . $pdf_target_path_escaped .
-                   ' -quality 85 -scene 1 ' . // Moved -quality and -scene after input PDF
-                   $temp_images_output_escaped . ' 2>&1';
-
+        $command = $magick_exe_escaped . ' -density 180 ' . $pdf_target_path_escaped . ' -quality 85 -scene 1 ' . $temp_images_output_escaped . ' 2>&1';
+        // Log the command for debugging purposes
         error_log("Attempting ImageMagick command: " . $command);
         exec($command, $output, $return_var);
 
         if ($return_var !== 0) {
-            // Restore original PATH before throwing error
             putenv('PATH=' . $original_path);
             throw new Exception("PDF conversion failed: " . implode("\n", $output));
         }
 
-        // Rename temporary images to desired format (page-1.jpg, page-2.jpg etc.)
         $generated_temp_files = glob($images_dir . 'temp_raw_*.jpg');
         if (empty($generated_temp_files)) {
             putenv('PATH=' . $original_path);
@@ -209,756 +220,671 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $page_count = 0;
         $first_page_server_path = null;
-
         foreach ($generated_temp_files as $temp_image_file) {
             $page_count++;
             $final_image_name = sprintf('page-%d.jpg', $page_count);
             $final_image_path = $images_dir . $final_image_name;
-            if (!rename($temp_image_file, $final_image_path)) {
-                error_log("Failed to rename temporary image file '{$temp_image_file}' to '{$final_image_path}'.");
-                // Restore original PATH
-                putenv('PATH=' . $original_path);
-                throw new Exception("Failed to finalize image naming for page " . $page_count . ".");
-            }
-            if (!chmod($final_image_path, 0644)) {
-                error_log("Failed to set permissions for image file: " . $final_image_path);
-            }
+            rename($temp_image_file, $final_image_path);
+            chmod($final_image_path, 0644);
             if ($page_count === 1) {
                 $first_page_server_path = $final_image_path;
             }
         }
 
-        // Generate Open Graph and List View Thumbnails from the first page
         $og_image_web_path = null;
         $list_thumb_web_path = null;
-
         if ($first_page_server_path) {
-            // --- Open Graph Thumbnail ---
             $og_image_name = 'og-thumb.jpg';
             $og_image_server_path = $images_dir . $og_image_name;
-            $og_image_web_path = $base_upload_dir . $date_sub_path . $unique_folder_name . '/images/' . $og_image_name;
-
-            // Resize to target width, then crop 1200x600 from the top (North gravity)
-            $command_og = $magick_exe_escaped . ' ' . escapeshellarg($first_page_server_path) .
-                          ' -resize ' . OG_THUMB_WIDTH . 'x' . // Resize to target width, proportional height
-                          ' -gravity North -crop ' . OG_THUMB_WIDTH . 'x' . OG_THUMB_HEIGHT . '+0+0 +repage' . // Crop from top-left to desired dimensions
-                          ' -quality 85 ' . escapeshellarg($og_image_server_path) . ' 2>&1';
-
-            error_log("Attempting ImageMagick command for OG thumbnail: " . $command_og);
+            $og_image_web_path = '/' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/images/') . $og_image_name;
+            
+            $command_og = $magick_exe_escaped . ' ' . escapeshellarg($first_page_server_path) . ' -resize ' . OG_THUMB_WIDTH . 'x -gravity North -crop ' . OG_THUMB_WIDTH . 'x' . OG_THUMB_HEIGHT . '+0+0 +repage -quality 85 ' . escapeshellarg($og_image_server_path) . ' 2>&1';
             exec($command_og, $output_og, $return_var_og);
-
-            if ($return_var_og !== 0) {
-                error_log('OG thumbnail generation failed. Command: ' . $command_og . ' Output: ' . implode("\n", $output_og));
-                $og_image_web_path = null; // Set to null if generation fails
+            if ($return_var_og === 0) {
+                chmod($og_image_server_path, 0644);
             } else {
-                if (!chmod($og_image_server_path, 0644)) {
-                    error_log("Failed to set permissions for OG thumbnail: " . $og_image_server_path);
-                }
+                $og_image_web_path = null;
             }
 
-            // --- List View Thumbnail ---
             $list_thumb_name = 'list-thumb.jpg';
             $list_thumb_server_path = $images_dir . $list_thumb_name;
-            $list_thumb_web_path = $base_upload_dir . $date_sub_path . $unique_folder_name . '/images/' . $list_thumb_name;
+            $list_thumb_web_path = '/' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/images/') . $list_thumb_name;
 
-            // Resize to target height, width proportional
-            $command_list_thumb = $magick_exe_escaped . ' ' . escapeshellarg($first_page_server_path) .
-                                  ' -resize x' . LIST_THUMB_HEIGHT . ' -quality 85 ' .
-                                  escapeshellarg($list_thumb_server_path) . ' 2>&1';
-
-            error_log("Attempting ImageMagick command for List thumbnail: " . $command_list_thumb);
+            $command_list_thumb = $magick_exe_escaped . ' ' . escapeshellarg($first_page_server_path) . ' -resize x' . LIST_THUMB_HEIGHT . ' -quality 85 ' . escapeshellarg($list_thumb_server_path) . ' 2>&1';
             exec($command_list_thumb, $output_list_thumb, $return_var_list_thumb);
-
-            if ($return_var_list_thumb !== 0) {
-                error_log('List thumbnail generation failed. Command: ' . $command_list_thumb . ' Output: ' . implode("\n", $output_list_thumb));
-                $list_thumb_web_path = null; // Set to null if generation fails
+            if ($return_var_list_thumb === 0) {
+                chmod($list_thumb_server_path, 0644);
             } else {
-                if (!chmod($list_thumb_server_path, 0644)) {
-                    error_log("Failed to set permissions for list thumbnail: " . $list_thumb_server_path);
-                }
+                $list_thumb_web_path = null;
             }
-        } else {
-            error_log("Warning: First page image not found, skipping thumbnail generation.");
         }
-
-        // Restore original PATH
         putenv('PATH=' . $original_path);
 
-        // 5. Insert data into database
-        $stmt = $pdo->prepare("
-            INSERT INTO editions (
-                title, publication_date, category_id, description, pdf_path,
-                og_image_path, list_thumb_path, page_count, file_size_bytes,
-                uploader_user_id, status, created_at, updated_at
-            ) VALUES (
-                :title, :publication_date, :category_id, :description, :pdf_path,
-                :og_image_path, :list_thumb_path, :page_count, :file_size_bytes,
-                :uploader_user_id, :status, NOW(), NOW()
-            )
-        ");
+        $stmt = $pdo->prepare("INSERT INTO editions (title, publication_date, category_id, description, pdf_path, og_image_path, list_thumb_path, page_count, file_size_bytes, uploader_user_id, status, status_reason, created_at, updated_at) VALUES (:title, :publication_date, :category_id, :description, :pdf_path, :og_image_path, :list_thumb_path, :page_count, :file_size_bytes, :uploader_user_id, :status, :status_reason, NOW(), NOW())");
+        $stmt->execute([':title' => $title, ':publication_date' => $publication_date, ':category_id' => $category_id, ':description' => $description, ':pdf_path' => $pdf_web_path, ':og_image_path' => $og_image_web_path, ':list_thumb_path' => $list_thumb_web_path, ':page_count' => $page_count, ':file_size_bytes' => $pdf_file['size'], ':uploader_user_id' => $uploaderUserId, ':status' => $status_to_save, ':status_reason' => $status_reason]);
+        $editionId = $pdo->lastInsertId();
 
-        $stmt->execute([
-            ':title' => $title,
-            ':publication_date' => $publication_date,
-            ':category_id' => $category_id,
-            ':description' => $description,
-            ':pdf_path' => $pdf_web_path,
-            ':og_image_path' => $og_image_web_path,
-            ':list_thumb_path' => $list_thumb_web_path,
-            ':page_count' => $page_count,
-            ':file_size_bytes' => $pdf_file['size'],
-            ':uploader_user_id' => $uploaderUserId,
-            ':status' => $status
-        ]);
-
-        $pdo->commit(); // Commit transaction
-
-        echo json_encode(['success' => true, 'message' => 'Edition uploaded successfully!', 'redirect' => 'manage-editions.php']);
-        exit;
-
+        $pdo->commit();
+        echo json_encode(['success' => true, 'message' => 'Edition uploaded successfully!', 'edition_id' => $editionId, 'redirect' => '/manage-editions']);
     } catch (Exception $e) {
-        $pdo->rollBack(); // Rollback on error
+        $pdo->rollBack();
         error_log("Edition upload failed: " . $e->getMessage());
-
-        // Attempt to clean up partially created files/directories on failure
         if (isset($full_edition_dir) && is_dir($full_edition_dir)) {
-            // Function to recursively delete directory contents
-            function deleteDir($dir) {
-                $files = array_diff(scandir($dir), array('.', '..'));
-                foreach ($files as $file) {
-                    (is_dir("$dir/$file")) ? deleteDir("$dir/$file") : unlink("$dir/$file");
+            function rrmdir($dir) {
+                if (is_dir($dir)) {
+                    $objects = scandir($dir);
+                    foreach ($objects as $object) {
+                        if ($object != "." && $object != "..") {
+                            if (is_dir($dir.DIRECTORY_SEPARATOR.$object)) rrmdir($dir.DIRECTORY_SEPARATOR.$object); else unlink($dir.DIRECTORY_SEPARATOR.$object);
+                        }
+                    }
+                    rmdir($dir);
                 }
-                return rmdir($dir);
             }
-            error_log("Attempting to clean up directory: " . $full_edition_dir);
-            try {
-                deleteDir($full_edition_dir);
-                error_log("Cleaned up directory: " . $full_edition_dir);
-            } catch (Exception $cleanup_e) {
-                error_log("Failed to clean up directory " . $full_edition_dir . ": " . $cleanup_e->getMessage());
-            }
+            rrmdir($full_edition_dir);
         }
-
-        echo json_encode(['success' => false, 'message' => 'Upload failed: ' . $e->getMessage()]);
-        exit;
+        echo json_encode(['success' => false, 'message' => 'An error occurred during the upload process: ' . $e->getMessage()]);
     }
+    exit;
 }
 ?>
 <!DOCTYPE html>
-<html lang="en" x-data="{ sidebarOpen: false, profileMenuOpen: false, mobileProfileMenuOpen: false, moreMenuOpen: false }" x-cloak>
+<html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title><?= htmlspecialchars($pageTitle) ?></title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?= htmlspecialchars($pageTitle) ?> - Edition Management</title>
+    <link rel="icon" href="<?= htmlspecialchars($faviconPath ?? '/favicon.ico') ?>" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        /* Your custom CSS variables and styles */
-        :root {
-            --primary-color: rgb(2, 118, 208);
-            --hover-bg-color: var(--primary-color);
-            --hover-text-color: white;
-            --border-radius: 20px;
-            --text-main-color: #374151;
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
         }
-
-        /* Alpine.js cloak to prevent flash of unstyled content */
-        [x-cloak] { display: none !important; }
-        body { font-family: 'Inter', sans-serif; }
-
-        /* General styles for consistent hover effects */
-        .tool-actions {
-            border: 1px solid rgba(0, 0, 0, 0.3);
-            border-radius: 25px;
-            padding: 5px 5px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            transition: all 0.3s ease;
+        .dark body {
+            background-color: #111827;
         }
-        .tool-actions button {
-            font-size: 0.75rem;
-            transition: background-color 0.3s, color 0.3s, border-radius 0.3s;
-            padding: 5px 10px;
-            border-radius: 10px;
+        .progress-bar {
+            background-color: #e5e7eb;
         }
-        .tool-actions button:hover {
-            background-color: var(--hover-bg-color);
-            color: var(--hover-text-color);
-            border-radius: var(--border-radius);
+        .dark .progress-bar {
+             background-color: #374151;
         }
-        .tool-actions i {
-            font-size: 0.75rem;
+        .progress-fill {
+            background-color: #4f46e5;
+            border-radius: 9999px;
+            transition: width 0.5s ease-in-out, background-color 0.5s ease-in-out;
+            height: 100%;
         }
-        .menu-button {
-            font-size: 0.85rem;
-        }
-        .menu-button i {
-            font-size: 0.85rem;
-        }
-        .profile-dropdown a:hover,
-        .tool-actions button:hover,
-        nav a:hover,
-        .more-menu a:hover,
-        .mobile-sidebar a:hover {
-            background-color: var(--hover-bg-color) !important;
-            color: var(--hover-text-color) !important;
-            border-radius: var(--border-radius);
-        }
-        .edition-title {
-            background-color: var(--primary-color);
-        }
-
-        /* Specific styles for the form layout and elements */
-        .upload-container {
-            background: white;
-            padding: 2rem;
-            border-radius: 1rem;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            max-width: 1200px; /* Wider layout */
-            margin: 2rem auto; /* Center the container horizontally */
-        }
-
-        .upload-header {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
-        .upload-header i {
-            font-size: 1.5rem;
-            color: var(--primary-color);
-        }
-
-        .upload-header h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--text-main-color);
-            margin: 0;
-        }
-
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-            color: var(--text-main-color);
-        }
-
-        .form-control {
+        .form-input {
             width: 100%;
-            padding: 0.75rem 1rem;
+            padding: 0.625rem 1rem;
             border: 1px solid #d1d5db;
             border-radius: 0.5rem;
-            font-size: 1rem;
-            transition: border-color 0.2s;
+            font-size: 0.875rem;
+            transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
         }
-
-        .form-control:focus {
+        .dark .form-input {
+            background-color: #374151;
+            border-color: #4b5563;
+            color: #d1d5db;
+        }
+        .form-input:focus {
             outline: none;
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 2px rgba(2, 118, 208, 0.1);
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
         }
-
-        .file-upload {
-            position: relative;
+        .dark .form-input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+        }
+        .pdf-preview-wrapper {
             display: flex;
-            flex-direction: row; /* Changed to row */
-            align-items: center; /* Vertically align items */
-            justify-content: center; /* Horizontally center content */
-            gap: 0.75rem; /* Added gap between icon and text */
-            padding: 1rem;
-            border: 2px dashed #d1d5db;
-            border-radius: 0.5rem;
-            background-color: #f9fafb;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .file-upload:hover {
-            border-color: var(--primary-color);
-            background-color: rgba(2, 118, 208, 0.05);
-        }
-
-        .file-upload .icon { /* New class for the icon/image */
-            width: 32px; /* Tailwind w-8 */
-            height: 32px; /* Tailwind h-8 */
-        }
-
-        .file-upload p {
-            margin: 0;
-            color: var(--text-main-color);
-            text-align: left; /* Changed text alignment */
-            font-size: 0.9rem; /* Slightly smaller font for compactness */
-        }
-
-        .file-upload input {
-            position: absolute;
+            justify-content: center;
+            align-items: center;
             width: 100%;
-            height: 100%;
-            opacity: 0; /* Hide the default file input button */
-            cursor: pointer;
-        }
-
-        .btn-primary {
-            background-color: var(--primary-color);
-            color: white;
-            border: none;
-            border-radius: 0.5rem;
-            padding: 0.75rem 1.5rem;
-            font-size: 1rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            width: 100%; /* Make button full width */
-        }
-
-        .btn-primary:hover {
-            background-color: #1a56db; /* A slightly darker blue on hover */
-        }
-
-        /* Progress and Alert Message Styles */
-        .progress-container {
-            background-color: #f3f4f6;
-            border-radius: 0.5rem;
-            padding: 0.75rem 1.5rem; /* Adjusted to match button padding */
-        }
-
-        .progress-bar {
-            height: 0.5rem;
-            background-color: #e5e7eb;
-            border-radius: 0.25rem;
             overflow: hidden;
-            margin-top: 0.5rem;
         }
-
-        .progress-fill {
-            height: 100%;
-            background-color: var(--primary-color);
-            width: 0%; /* Controls the fill percentage via JS */
-            transition: width 0.3s ease; /* Smooth animation for progress bar */
-        }
-
-        .alert {
-            padding: 1rem;
+        #pdf-preview-canvas {
+            border: 1px solid #e5e7eb;
             border-radius: 0.5rem;
-            margin-top: 1.5rem;
-            display: none; /* Hidden by default, shown by JS */
-            align-items: flex-start;
-            font-size: 0.95rem;
-            line-height: 1.4;
-            font-weight: 500;
             max-width: 100%;
-            margin-left: auto;
-            margin-right: auto;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            opacity: 1; /* Ensure initial visibility for fade-out */
-            transition: opacity 0.5s ease-out; /* Smooth fade-out transition */
+            max-height: 100%;
+            object-fit: contain;
         }
-        .alert i {
-            margin-right: 0.5rem;
-            margin-top: 0.125rem;
-            font-size: 1.1rem;
-        }
-        .alert-success {
-            background-color: #dcfce2;
-            color: #16a34a;
-            border: 1px solid #bbf7d0;
-        }
-        .alert-error {
-            background-color: #fee2e2;
-            color: #b91c1c;
-            border: 1px solid #fca5a5;
-        }
-        .alert-info {
-            background-color: #e0f2fe;
-            color: #0284c7;
-            border: 1px solid #7dd3fc;
-        }
-
-        /* Responsive adjustments */
-        @media (max-width: 768px) {
-            .upload-container {
-                padding: 1.5rem;
-                margin: 1rem;
-            }
-
-            .upload-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 0.5rem;
-            }
-
-            .upload-header h1 {
-                font-size: 1.25rem;
-            }
+         .dark #pdf-preview-canvas {
+            border-color: #4b5563;
         }
     </style>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-100 flex flex-col min-h-screen">
 
-<?php 
-// Assuming headersidebar.php is in the 'layout' directory one level up from 'editions'
-require_once __DIR__ . '/../layout/headersidebar.php';
-?>
+<?php require_once BASE_PATH . '/layout/headersidebar.php'; ?>
 
-<main class="p-[20px] md:py-6 md:px-4 md:ml-64">
-    <div class="max-w-full mx-auto py-0">
+<main class="flex-1 py-1 px-4 md:p-1 md:ml-0">
+    <div class="max-w-7xl mx-auto">
         <?php display_session_message(); ?>
-
-        <div class="bg-white rounded-xl shadow-md overflow-hidden p-6">
-            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-                <div class="flex items-center gap-3">
-                    <i class="fas fa-upload text-2xl text-blue-600"></i>
-                    <h1 class="text-2xl font-semibold text-gray-800">Upload New Edition</h1>
-                </div>
-                <a href="manage-editions.php" class="inline-flex items-center px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition duration-300 justify-center">
-                    <i class="fas fa-arrow-left mr-2"></i> Back to Editions
-                </a>
-            </div>
-
-            <form id="uploadEditionForm" enctype="multipart/form-data">
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-x-4">
-                    <div class="form-group">
-                        <label for="title">Edition Title</label>
-                        <input type="text" id="title" name="title" class="form-control" placeholder="Enter edition title" required>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6">
+             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Left Column: Form -->
+                <div class="lg:col-span-1">
+                     <div class="flex items-center gap-2 mb-4 justify-center md:justify-start">
+                        <i class="fa-solid fa-cloud-arrow-up text-xl text-indigo-900 dark:text-indigo-400"></i>
+                        <h1 class="text-xl font-bold text-gray-800 dark:text-gray-100"><?= htmlspecialchars($pageTitle) ?></h1>
                     </div>
+                    <hr class="mb-6 border-gray-200 dark:border-gray-700">
+                    <form id="uploadForm" method="POST" enctype="multipart/form-data" class="space-y-4">
+                        <div>
+                            <label for="title" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
+                                <i class="fa-solid fa-newspaper text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Edition Title
+                                <span class="text-red-500 ml-1">*</span>
+                            </label>
+                            <input type="text" name="title" id="title" required class="form-input">
+                        </div>
 
-                    <div class="form-group">
-                        <label for="publication_date">Publication Date</label>
-                        <input type="date" id="publication_date" name="publication_date" class="form-control" max="<?= date('Y-m-d') ?>" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="category_id">Category</label>
-                        <select id="category_id" name="category_id" class="form-control" required>
-                            <option value="">Select a Category</option>
-                            <?php foreach ($categories as $category): ?>
-                                <option value="<?= htmlspecialchars($category['category_id']) ?>">
-                                    <?= htmlspecialchars($category['name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="description">Description (Optional)</label>
-                    <textarea id="description" name="description" class="form-control" rows="1" placeholder="Enter a brief description for this edition"></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label for="status">Status</label>
-                    <select id="status" name="status" class="form-control" required>
-                        <option value="published">Published</option>
-                        <option value="private">Private</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">PDF File</label>
-                    <div class="file-upload">
-                        <!-- Replaced Icons8 image with an inline SVG for a file icon, styled with Tailwind CSS -->
-                        <i class="fas fa-file-pdf text-2xl text-red-600"></i>
-                        <p>Drag & drop your PDF here or click to browse</p>
-                        <input type="file" name="pdf_file" id="pdf_file" accept="application/pdf" required>
-                    </div>
-                    <p class="text-sm text-gray-500 mt-1">Max file size: 50MB. Only PDF files are allowed.</p>
-                </div>
-
-                <div class="flex flex-col sm:flex-row justify-end gap-3 mt-6">
-                    <div id="uploadActionContainer" class="flex-1 flex justify-end">
-                        <button type="submit" id="uploadButton" class="btn-primary flex items-center justify-center sm:w-auto">
-                            <i class="fas fa-cloud-upload-alt mr-2"></i> Upload Edition
-                        </button>
-                        <div id="progressContainer" class="progress-container hidden w-full sm:w-auto">
-                            <div class="flex items-center justify-between text-sm text-gray-700">
-                                <span id="uploadStatus">Uploading...</span>
-                                <!-- Added a spinner icon here -->
-                                <span id="processingSpinner" class="hidden"><i class="fas fa-spinner fa-spin ml-2 text-blue-500"></i></span>
-                                <span id="uploadPercent">0%</span>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label for="publication_date" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
+                                    <i class="fa-solid fa-calendar-days text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Publication Date
+                                    <span class="text-red-500 ml-1">*</span>
+                                </label>
+                                <input type="date" name="publication_date" id="publication_date" value="<?= date('Y-m-d') ?>" required class="form-input">
                             </div>
-                            <div class="progress-bar">
-                                <div id="progressFill" class="progress-fill"></div>
+                            <div>
+                                <label for="category_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
+                                    <i class="fa-solid fa-folder-open text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Category
+                                    <span class="text-red-500 ml-1">*</span>
+                                </label>
+                                <select name="category_id" id="category_id" required class="form-input">
+                                    <option value="">Select a Category</option>
+                                    <?php 
+                                        $default_categories = array_filter($categories, function($c) { return $c['is_default']; });
+                                        $featured_categories = array_filter($categories, function($c) { return $c['is_featured'] && !$c['is_default']; });
+                                        $other_categories = array_filter($categories, function($c) { return !$c['is_featured'] && !$c['is_default']; });
+                                    ?>
+                                    <?php if(!empty($default_categories)): ?>
+                                        <optgroup label="Default">
+                                        <?php foreach ($default_categories as $category): ?>
+                                            <option value="<?= htmlspecialchars($category['category_id']) ?>" selected><?= htmlspecialchars($category['name']) ?></option>
+                                        <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                     <?php if(!empty($featured_categories)): ?>
+                                        <optgroup label="Featured">
+                                        <?php foreach ($featured_categories as $category): ?>
+                                            <option value="<?= htmlspecialchars($category['category_id']) ?>"><?= htmlspecialchars($category['name']) ?></option>
+                                        <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                     <?php if(!empty($other_categories)): ?>
+                                        <optgroup label="Other">
+                                        <?php foreach ($other_categories as $category): ?>
+                                            <option value="<?= htmlspecialchars($category['category_id']) ?>"><?= htmlspecialchars($category['name']) ?></option>
+                                        <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                </select>
                             </div>
                         </div>
-                    </div>
-                    <a href="manage-editions.php" class="inline-flex items-center justify-center px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition duration-300 sm:w-auto">
-                        <i class="fas fa-times-circle mr-2"></i> Cancel
-                    </a>
+
+                        <div class="hidden md:block">
+                             <label for="description" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
+                                <i class="fa-solid fa-file-lines text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Description
+                            </label>
+                            <textarea id="description" rows="1" class="form-input"></textarea>
+                        </div>
+                         <input type="hidden" name="description" id="description_hidden">
+                        
+                        <div>
+                            <div class="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center shrink-0 gap-1.5 mb-2">
+                                <i class="fa-solid fa-circle-check text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Status<span class="text-red-500 ml-1">*</span>:
+                            </div>
+                            <div class="flex items-center">
+                                <select name="status" id="status_select" class="form-input">
+                                    <option value="Published">Public</option>
+                                    <option value="Private">Private</option>
+                                    <option value="Scheduled">Schedule</option>
+                                </select>
+                            </div>
+                             <span id="schedule-display" class="text-xs text-indigo-700 dark:text-indigo-400 font-medium mt-2 block"></span>
+                        </div>
+
+
+                         <div>
+                            <label for="pdf_file" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
+                                <i class="fa-solid fa-file-pdf text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>PDF File
+                                <span class="text-red-500 ml-1">*</span>
+                            </label>
+                            <label for="pdf_file" class="mt-1 flex justify-center items-center px-4 py-2.5 border-2 border-gray-300 dark:border-gray-600 border-dashed rounded-md cursor-pointer hover:border-indigo-500 bg-indigo-50 dark:bg-gray-700 transition-colors duration-200">
+                                <div class="flex items-center gap-3">
+                                    <i class="fa-solid fa-file-pdf text-xl text-red-500"></i>
+                                    <div class="text-gray-600 dark:text-gray-400 text-left">
+                                        <p class="hidden md:block text-xs">Drag & drop or <span class="font-semibold text-indigo-600 dark:text-indigo-400">click to browse</span> (PDF only, Max 50MB)</p>
+                                        <p class="md:hidden font-bold text-xs">Click to upload PDF (Max. 50MB)</p>
+                                    </div>
+                                </div>
+                                <input type="file" name="pdf_file" id="pdf_file" class="sr-only" accept="application/pdf" required>
+                            </label>
+                            <p id="fileName" class="text-center text-xs text-gray-500 dark:text-gray-400 mt-2"></p>
+                        </div>
+
+
+                        <div class="flex justify-end space-x-3 pt-4">
+                            <a href="/manage-editions" class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-indigo-800 bg-indigo-200 hover:bg-indigo-300 dark:bg-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-800">
+                                Cancel
+                            </a>
+                            <button type="submit" id="submitBtn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-900 hover:bg-indigo-800 dark:bg-indigo-600 dark:hover:bg-indigo-700">
+                                <i class="fa-solid fa-cloud-arrow-up mr-2"></i>Upload Edition
+                            </button>
+                        </div>
+                    </form>
                 </div>
 
-                <div id="finalMessage" class="alert"></div>
-            </form>
+                <!-- Right Column: Info Panel -->
+                <div class="lg:col-span-1 relative">
+                    <!-- Divider -->
+                    <div class="hidden lg:block absolute top-0 bottom-0 -left-4">
+                         <div class="h-full border-l border-gray-200 dark:border-gray-700"></div>
+                    </div>
+
+                    <div>
+                         <div id="preview-container" class="flex flex-col items-center text-center w-full max-w-md mx-auto">
+                            
+                            <div id="preview-placeholder" class="w-full h-[375px] bg-indigo-50 dark:bg-gray-700 rounded-lg flex flex-col items-center justify-center p-4 border border-indigo-100 dark:border-gray-600 mb-4">
+                                <div class="bg-indigo-900 dark:bg-indigo-600 w-[100px] h-[100px] rounded-full flex items-center justify-center mb-4">
+                                    <i class="fa-solid fa-file-image text-5xl text-white"></i>
+                                </div>
+                                <p class="text-slate-500 dark:text-gray-400 font-medium">(Please select PDF to preview)</p>
+                            </div>
+
+                            <div id="pdf-preview-container" class="hidden w-full h-[375px] bg-indigo-50 dark:bg-gray-700 rounded-lg flex items-center justify-center p-2 mb-4 pdf-preview-wrapper">
+                                <canvas id="pdf-preview-canvas"></canvas>
+                            </div>
+
+
+                            <h3 id="preview-main-title" class="text-lg font-bold text-gray-800 dark:text-gray-100 break-all mb-4">Edition Preview</h3>
+                            
+                            <div id="live-details-preview" class="w-full flex flex-wrap justify-center items-center gap-2 mb-4">
+                                <div id="preview-date-chip" class="flex items-center bg-orange-100 text-orange-800 text-xs font-bold px-3 py-1 rounded-full">
+                                    <i class="fa-solid fa-calendar-days text-sm mr-1.5"></i>
+                                    <span id="preview-date-live">N/A</span>
+                                </div>
+                                <div id="preview-category-chip" class="flex items-center bg-indigo-100 text-indigo-800 text-xs font-bold px-3 py-1 rounded-full">
+                                    <i class="fa-solid fa-folder-open text-sm mr-1.5"></i>
+                                    <span id="preview-category-live">N/A</span>
+                                </div>
+                                <div id="preview-status-chip" class="flex items-center text-xs font-bold px-3 py-1 rounded-full">
+                                    <i class="fa-solid fa-circle-check text-sm mr-1.5"></i>
+                                    <span id="preview-status-live">N/A</span>
+                                </div>
+                            </div>
+
+                             <div id="progressContainer" class="hidden w-full p-4 bg-indigo-50 dark:bg-gray-700 border border-indigo-200 dark:border-gray-600 rounded-lg mt-4">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-200">Upload Status</h3>
+                                    <div id="loading-spinner" class="hidden w-5 h-5 border-2 border-indigo-200 dark:border-gray-500 border-t-indigo-600 dark:border-t-indigo-400 rounded-full animate-spin"></div>
+                                </div>
+                                <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width: 0%;"></div></div>
+                                <div class="flex justify-between mt-2 text-xs">
+                                    <span id="uploadStatus" class="font-medium text-gray-600 dark:text-gray-300">Awaiting upload...</span>
+                                    <span id="uploadPercent" class="font-medium text-indigo-600 dark:text-indigo-400">0%</span>
+                                </div>
+                             </div>
+                         </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </main>
 
+<!-- Schedule Modal -->
+<div id="scheduleModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 hidden">
+    <div class="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl max-w-sm w-full transform transition-all">
+        <div class="flex items-center justify-center mb-3">
+            <div class="bg-indigo-100 text-indigo-600 p-3 rounded-full flex items-center justify-center w-12 h-12">
+                <i class="fa-solid fa-clock text-2xl"></i>
+            </div>
+        </div>
+        <h3 class="text-xl font-bold text-slate-800 dark:text-gray-100 text-center mb-1">Schedule Publication</h3>
+        <p class="text-center text-slate-500 dark:text-gray-400 text-sm mb-4">Set the date and time for the edition to be published.</p>
+        <div class="space-y-4">
+            <div>
+                <label for="schedule_date" class="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">SCHEDULE DATE</label>
+                <input type="date" id="schedule_date" class="form-input">
+            </div>
+            <div>
+                <label for="schedule_time" class="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">SCHEDULE TIME</label>
+                <input type="time" id="schedule_time" class="form-input">
+            </div>
+        </div>
+        <div class="flex gap-3 mt-6">
+            <button type="button" id="cancelScheduleBtn" class="flex-1 px-4 py-2 bg-slate-200 text-slate-700 font-semibold rounded-md hover:bg-slate-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition text-sm">Cancel</button>
+            <button type="button" id="confirmScheduleBtn" class="flex-1 px-4 py-2 bg-indigo-900 text-white font-semibold rounded-md hover:bg-indigo-800 dark:bg-indigo-600 dark:hover:bg-indigo-700 transition text-sm">Confirm</button>
+        </div>
+    </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('uploadEditionForm');
-    const fileUpload = document.querySelector('.file-upload');
-    const fileInput = document.getElementById('pdf_file');
+    // FIX: Set the worker source for PDF.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+
+    const uploadForm = document.getElementById('uploadForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const pdfFileInput = document.getElementById('pdf_file');
     const progressContainer = document.getElementById('progressContainer');
+    const progressFill = document.getElementById('progressFill');
     const uploadStatus = document.getElementById('uploadStatus');
     const uploadPercent = document.getElementById('uploadPercent');
-    const progressFill = document.getElementById('progressFill');
-    const finalMessage = document.getElementById('finalMessage');
-    const uploadButton = document.getElementById('uploadButton'); // Get reference to the upload button
-    const processingSpinner = document.getElementById('processingSpinner'); // Get reference to the spinner
+    const loadingSpinner = document.getElementById('loading-spinner');
+    const fileNameDisplay = document.getElementById('fileName');
 
-    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB in bytes
-    let processingInterval; // Variable to hold the interval for simulated processing
+    // Drag and Drop PDF Input
+    const fileUploadLabel = document.querySelector('label[for="pdf_file"]');
 
-    // Function to handle file selection and update display
-    function handleFile(file) {
-        if (!file) {
-            fileUpload.querySelector('p').textContent = 'Drag & drop your PDF here or click to browse';
-            hideAlert();
-            return;
+    // Preview elements
+    const previewMainTitle = document.getElementById('preview-main-title');
+    const previewDateLive = document.getElementById('preview-date-live');
+    const previewCategoryLive = document.getElementById('preview-category-live');
+    const previewStatusLive = document.getElementById('preview-status-live');
+    const previewStatusChip = document.getElementById('preview-status-chip');
+
+
+    const previewPlaceholder = document.getElementById('preview-placeholder');
+    const pdfPreviewContainer = document.getElementById('pdf-preview-container');
+    const pdfPreviewCanvas = document.getElementById('pdf-preview-canvas');
+    
+    // Form fields for live preview
+    const titleInput = document.getElementById('title');
+    const dateInput = document.getElementById('publication_date');
+    const categorySelect = document.getElementById('category_id');
+    const descriptionInput = document.getElementById('description');
+    const descriptionHidden = document.getElementById('description_hidden');
+    const statusSelect = document.getElementById('status_select');
+
+    // Schedule Modal Logic
+    const scheduleModal = document.getElementById('scheduleModal');
+    const scheduleDateInput = document.getElementById('schedule_date');
+    const scheduleTimeInput = document.getElementById('schedule_time');
+    const confirmScheduleBtn = document.getElementById('confirmScheduleBtn');
+    const cancelScheduleBtn = document.getElementById('cancelScheduleBtn');
+    const scheduleDisplay = document.getElementById('schedule-display');
+    
+    let previousStatusValue = statusSelect.value;
+
+    const hiddenScheduleDate = document.createElement('input');
+    hiddenScheduleDate.type = 'hidden';
+    hiddenScheduleDate.name = 'schedule_date';
+    uploadForm.appendChild(hiddenScheduleDate);
+
+    const hiddenScheduleTime = document.createElement('input');
+    hiddenScheduleTime.type = 'hidden';
+    hiddenScheduleTime.name = 'schedule_time';
+    uploadForm.appendChild(hiddenScheduleTime);
+    
+    statusSelect.addEventListener('change', (e) => {
+        if (e.target.value === 'Scheduled') {
+            scheduleModal.classList.remove('hidden');
+        } else {
+            previousStatusValue = e.target.value;
+            hiddenScheduleDate.value = '';
+            hiddenScheduleTime.value = '';
+            scheduleDisplay.textContent = '';
         }
+    });
 
-        if (file.size > MAX_FILE_SIZE) {
-            showError('❌ File size exceeds 50MB limit.');
-            fileInput.value = ''; // Clear the input if invalid
-            fileUpload.querySelector('p').textContent = 'Drag & drop your PDF here or click to browse';
-            return;
+
+    cancelScheduleBtn.addEventListener('click', () => {
+        scheduleModal.classList.add('hidden');
+        statusSelect.value = previousStatusValue;
+    });
+
+    confirmScheduleBtn.addEventListener('click', () => {
+        if (scheduleDateInput.value && scheduleTimeInput.value) {
+            hiddenScheduleDate.value = scheduleDateInput.value;
+            hiddenScheduleTime.value = scheduleTimeInput.value;
+
+            // Format date and time for display
+            const date = new Date(scheduleDateInput.value + 'T' + scheduleTimeInput.value);
+            const formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+            const formattedTime = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+            const scheduleText = `(${formattedDate} at ${formattedTime})`;
+            scheduleDisplay.textContent = scheduleText;
+            scheduleModal.classList.add('hidden');
+        } else {
+            alert('Please select both a date and time to schedule.');
         }
-        if (file.type !== 'application/pdf') {
-            showError('❌ Please upload a PDF file only.');
-            fileInput.value = ''; // Clear the input if invalid
-            fileUpload.querySelector('p').textContent = 'Drag & drop your PDF here or click to browse';
-            return;
+    });
+
+
+    function updateDescription() {
+        const title = titleInput.value.trim();
+        const dateValue = dateInput.value; // YYYY-MM-DD
+        
+        let newDescriptionValue = '';
+        if (title && dateValue) {
+            const dateParts = dateValue.split('-'); // [YYYY, MM, DD]
+            const formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
+            newDescriptionValue = `${title} - ${formattedDate}`;
+        } else if (title) {
+            newDescriptionValue = title;
         }
         
-        fileUpload.querySelector('p').textContent = file.name;
-        hideAlert();
+        // This logic handles both the visible (on desktop) and hidden inputs
+        if (document.getElementById('description')) {
+             const descriptionTextarea = document.getElementById('description');
+             const oldAutoValue = descriptionTextarea.dataset.autoValue || '';
+             if (descriptionTextarea.value === '' || descriptionTextarea.value === oldAutoValue) {
+                descriptionTextarea.value = newDescriptionValue;
+                descriptionTextarea.dataset.autoValue = newDescriptionValue;
+             }
+        }
+        descriptionHidden.value = document.getElementById('description')?.value || newDescriptionValue;
     }
 
-    // Event listener for file input changes (user clicks and selects)
-    fileInput.addEventListener('change', function() {
-        handleFile(this.files[0]);
-    });
+    function updateLivePreview() {
+        // Update Title
+        previewMainTitle.textContent = titleInput.value.trim() || 'Edition Preview';
 
-    // Event listeners for drag and drop
-    fileUpload.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        fileUpload.classList.add('border-blue-500', 'bg-blue-50');
-    });
+        // Update Date
+        previewDateLive.textContent = dateInput.value ? new Date(dateInput.value + 'T00:00:00').toLocaleDateString('en-GB') : 'N/A';
 
-    fileUpload.addEventListener('dragleave', () => {
-        e.preventDefault(); // Prevent file from opening in browser
-        fileUpload.classList.remove('border-blue-500', 'bg-blue-50');
-    });
+        // Update Category
+        const selectedCategory = categorySelect.options[categorySelect.selectedIndex];
+        previewCategoryLive.textContent = selectedCategory.value ? selectedCategory.text : 'N/A';
 
-    fileUpload.addEventListener('drop', (e) => {
-        e.preventDefault();
-        fileUpload.classList.remove('border-blue-500', 'bg-blue-50');
-
-        if (e.dataTransfer.files.length > 0) {
-            fileInput.files = e.dataTransfer.files; // Assign dropped files to input
-            // Manually dispatch a change event to trigger the handleFile function
-            const event = new Event('change', { bubbles: true });
-            fileInput.dispatchEvent(event);
+        // Update Status
+        previewStatusLive.textContent = statusSelect.options[statusSelect.selectedIndex].text;
+        
+        // Update status chip color
+        const selectedStatus = statusSelect.value;
+        if (selectedStatus === 'Published') {
+            previewStatusChip.className = 'flex items-center bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full';
+        } else { // Private
+            previewStatusChip.className = 'flex items-center bg-yellow-100 text-yellow-800 text-xs font-bold px-3 py-1 rounded-full';
         }
-    });
-
-    form.addEventListener('submit', function(e) {
-        e.preventDefault();
-
-        // Basic form validation before AJAX
-        if (!form.title.value.trim()) {
-            showError('❌ Please enter an Edition Title.');
-            return;
-        }
-        if (!form.publication_date.value) {
-            showError('❌ Please select a Publication Date.');
-            return;
-        }
-        if (!form.category_id.value) {
-            showError('❌ Please select a Category.');
-            return;
-        }
-        if (!fileInput.files || fileInput.files.length === 0) {
-            showError('❌ Please select a PDF file to upload.');
-            return;
-        }
-        // Additional file validation (size/type) is done in handleFile and server-side
-
-        uploadFile();
-    });
-
-    function showAlert(message, type) {
-        finalMessage.className = `alert alert-${type}`;
-        finalMessage.innerHTML = `<div class="flex items-center gap-2"><i class="fas ${type === 'success' ? 'fa-check-circle' : (type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle')}"></i><span>${message}</span></div>`;
-        finalMessage.style.display = 'block';
-        finalMessage.style.opacity = '1'; // Ensure it's fully visible before fading
-
-        // Set timeout to hide after 3 seconds
-        setTimeout(() => {
-            finalMessage.style.opacity = '0'; // Start fade out
-            finalMessage.addEventListener('transitionend', () => {
-                finalMessage.style.display = 'none'; // Hide completely after transition
-            }, { once: true }); // Ensure listener is removed after one execution
-        }, 3000);
     }
 
-    function showError(message) {
-        showAlert(message, 'error');
-        // Ensure progress container is hidden and button is shown on error
-        progressContainer.classList.add('hidden');
-        uploadButton.classList.remove('hidden');
-        clearInterval(processingInterval); // Stop any ongoing simulation
-        processingSpinner.classList.add('hidden'); // Hide spinner on error
+    titleInput.addEventListener('input', () => {
+        updateLivePreview();
+        updateDescription();
+    });
+    dateInput.addEventListener('change', () => {
+        updateLivePreview();
+        updateDescription();
+    });
+
+    // Also update description when the textarea is manually changed, so we don't auto-overwrite it.
+    if(document.getElementById('description')){
+        document.getElementById('description').addEventListener('input', (e) => {
+            document.getElementById('description_hidden').value = e.target.value;
+            delete e.target.dataset.autoValue;
+        });
     }
 
-    function showSuccess(message) {
-        showAlert(message, 'success');
-    }
+    categorySelect.addEventListener('change', updateLivePreview);
+    statusSelect.addEventListener('change', updateLivePreview);
 
-    function hideAlert() { // Function to hide alert immediately
-        finalMessage.style.display = 'none';
-        finalMessage.style.opacity = '1'; // Reset opacity for next time
-    }
 
-    function uploadFile() {
-        // Hide the upload button and show the progress bar
-        uploadButton.classList.add('hidden');
-        progressContainer.classList.remove('hidden');
-        processingSpinner.classList.add('hidden'); // Ensure spinner is hidden initially
-
-        hideAlert(); // Hide any existing alerts immediately
-        progressFill.style.width = '0%';
-        uploadPercent.textContent = '0%';
-        uploadStatus.textContent = 'Uploading...';
-
-        const formData = new FormData(form);
-
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', 'upload-edition.php'); // POST to itself for processing
-        xhr.timeout = 300000; // 5 minutes timeout
-
-        xhr.upload.addEventListener('progress', e => {
-            if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                progressFill.style.width = `${percent}%`;
-                uploadPercent.textContent = `${percent}%`;
-                if (percent === 100) {
-                    uploadStatus.textContent = 'Processing files on server...';
-                    processingSpinner.classList.remove('hidden'); // Show spinner when processing
-                    // Start simulated processing progress after upload is 100%
-                    startSimulatedProcessing();
-                }
+    if(fileUploadLabel) {
+        fileUploadLabel.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadLabel.classList.add('border-indigo-500');
+        });
+        fileUploadLabel.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            fileUploadLabel.classList.remove('border-indigo-500');
+        });
+        fileUploadLabel.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadLabel.classList.remove('border-indigo-500');
+            if(e.dataTransfer.files.length > 0){
+                pdfFileInput.files = e.dataTransfer.files;
+                const changeEvent = new Event('change', { bubbles: true });
+                pdfFileInput.dispatchEvent(changeEvent);
             }
         });
+    }
 
-        xhr.onload = () => {
-            clearInterval(processingInterval); // Stop simulated processing
-            processingSpinner.classList.add('hidden'); // Hide spinner on load
-            // Set final progress to 100% before hiding
-            progressFill.style.width = '100%';
-            uploadPercent.textContent = '100%'; // Ensure 100% is shown before hiding
-            uploadPercent.classList.remove('hidden'); // Ensure percentage is visible if it was hidden
+    pdfFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            fileNameDisplay.textContent = `Selected: ${file.name}`;
+            if (file.type === 'application/pdf') {
+                renderPdfPreview(file);
+            } else {
+                pdfPreviewContainer.classList.add('hidden');
+                previewPlaceholder.classList.remove('hidden');
+            }
+        } else {
+            fileNameDisplay.textContent = '';
+            pdfPreviewContainer.classList.add('hidden');
+            previewPlaceholder.classList.remove('hidden');
+        }
+    });
 
-            // Hide progress bar and show button
-            progressContainer.classList.add('hidden');
-            uploadButton.classList.remove('hidden');
-
+    async function renderPdfPreview(file) {
+        const fileReader = new FileReader();
+        fileReader.onload = async function() {
+            const typedarray = new Uint8Array(this.result);
             try {
-                const res = JSON.parse(xhr.responseText);
-                if (res.success) {
-                    showSuccess(res.message);
+                // First, make the container visible so we can measure its width
+                previewPlaceholder.classList.add('hidden');
+                pdfPreviewContainer.classList.remove('hidden');
+
+                const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+                const page = await pdf.getPage(1);
+                
+                const container = document.getElementById('pdf-preview-container');
+                // We get the width *after* making it visible
+                const containerWidth = container.offsetWidth;
+                
+                // Get viewport at scale 1.0 to determine original size, then calculate scale to fit container
+                const viewport = page.getViewport({ scale: 1.0 });
+                const scale = containerWidth / viewport.width;
+                const scaledViewport = page.getViewport({ scale: scale });
+
+                const context = pdfPreviewCanvas.getContext('2d');
+                pdfPreviewCanvas.height = scaledViewport.height;
+                pdfPreviewCanvas.width = scaledViewport.width;
+
+                await page.render({
+                    canvasContext: context,
+                    viewport: scaledViewport
+                }).promise;
+
+                // The container is already visible, so no need for class changes here.
+
+            } catch (error) {
+                console.error('Error rendering PDF preview:', error);
+                // If rendering fails, hide the canvas and show the placeholder again
+                pdfPreviewContainer.classList.add('hidden');
+                previewPlaceholder.classList.remove('hidden');
+            }
+        };
+        fileReader.readAsArrayBuffer(file);
+    }
+
+    uploadForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        progressContainer.classList.remove('hidden');
+        if (window.innerWidth < 768) { 
+            progressContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        progressContainer.classList.remove('bg-red-100', 'bg-green-100');
+        progressContainer.classList.add('bg-indigo-50');
+        progressFill.style.backgroundColor = '#4338ca'; // Reset to indigo
+        progressFill.style.width = '0%';
+        uploadStatus.textContent = 'Uploading file...';
+        uploadPercent.textContent = '0%';
+        loadingSpinner.classList.remove('hidden');
+        submitBtn.disabled = true;
+
+        const formData = new FormData(uploadForm);
+        const xhr = new XMLHttpRequest();
+        
+        xhr.open('POST', '/editions/upload-edition.php', true);
+
+        xhr.upload.onprogress = function(e) {
+            if (e.lengthComputable) {
+                const percentComplete = (e.loaded / e.total) * 90; // Upload will go up to 90%
+                progressFill.style.width = percentComplete + '%';
+                uploadPercent.textContent = Math.round(percentComplete) + '%';
+            }
+        };
+        
+        xhr.upload.onload = function() {
+            progressFill.style.width = '90%';
+            uploadPercent.textContent = '90%';
+            uploadStatus.textContent = 'Processing file...';
+        };
+
+        xhr.onload = function() {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                const result = JSON.parse(xhr.responseText);
+                if (result.success) {
+                    loadingSpinner.classList.add('hidden');
+                    uploadStatus.textContent = 'Successfully completed!';
+                    progressFill.style.width = '100%';
+                    uploadPercent.textContent = '100%';
+                    progressFill.style.backgroundColor = '#22c55e'; // Green for success
                     setTimeout(() => {
-                        window.location.href = res.redirect || 'manage-editions.php';
-                    }, 2000); // Redirect after 2 seconds
+                        window.location.href = result.redirect || '/manage-editions';
+                    }, 1000);
                 } else {
-                    showError(res.message);
+                    loadingSpinner.classList.add('hidden');
+                    uploadStatus.textContent = 'Upload failed: ' + result.message;
+                    progressFill.style.backgroundColor = '#ef4444'; // Red for fail
+                    submitBtn.disabled = false;
                 }
-            } catch (e) {
-                showError('Failed to process server response. This could be a server error. Check browser console and server logs.');
-                console.error('Response parsing error:', e);
-                console.error('Full server response received:', xhr.responseText);
+            } else {
+                 loadingSpinner.classList.add('hidden');
+                 uploadStatus.textContent = 'Upload error. Please try again.';
+                 progressFill.style.backgroundColor = '#ef4444';
+                 submitBtn.disabled = false;
             }
         };
 
-        xhr.onerror = () => {
-            clearInterval(processingInterval); // Stop simulated processing
-            processingSpinner.classList.add('hidden'); // Hide spinner on error
-            uploadPercent.classList.remove('hidden'); // Ensure percentage is visible on error
-            // Hide progress bar and show button
-            progressContainer.classList.add('hidden');
-            uploadButton.classList.remove('hidden');
-            showError('Network error occurred during upload. Please check your internet connection.');
-        };
-
-        xhr.ontimeout = () => {
-            clearInterval(processingInterval); // Stop simulated processing
-            processingSpinner.classList.add('hidden'); // Hide spinner on timeout
-            uploadPercent.classList.remove('hidden'); // Ensure percentage is visible on timeout
-            // Hide progress bar and show button
-            progressContainer.classList.add('hidden');
-            uploadButton.classList.remove('hidden');
-            showError('Request timed out. Server processing took too long.');
+        xhr.onerror = function() {
+            loadingSpinner.classList.add('hidden');
+            uploadStatus.textContent = 'Network error. Please try again.';
+            progressFill.style.backgroundColor = '#ef4444';
+            submitBtn.disabled = false;
         };
 
         xhr.send(formData);
-    }
+    });
 
-    // Function to start simulated processing progress
-    function startSimulatedProcessing() {
-        let simulatedPercent = 0;
-        // The duration here is an estimate for how long the server might take.
-        // Adjust this value (in milliseconds) based on typical server processing times.
-        const duration = 10000; // 10 seconds for simulated processing to reach 100%
-        const intervalTime = 50; // Update every 50ms
-        const increment = (100 / (duration / intervalTime));
-
-        const phases = [
-            { threshold: 30, message: 'Image Conversions...' },
-            { threshold: 70, message: 'Thumbnail Creation...' },
-            { threshold: 100, message: 'Finalizing...' } // This phase will hide the percentage
-        ];
-        let currentPhaseIndex = 0;
-
-        processingInterval = setInterval(() => {
-            simulatedPercent += increment;
-            if (simulatedPercent > 100) {
-                simulatedPercent = 100; // Ensure it doesn't go over 100%
-            }
-
-            // Update status message based on phases
-            if (currentPhaseIndex < phases.length && simulatedPercent >= phases[currentPhaseIndex].threshold) {
-                uploadStatus.textContent = phases[currentPhaseIndex].message;
-                // If it's the "Finalizing" phase, hide the percentage
-                if (phases[currentPhaseIndex].message === 'Finalizing...') {
-                    uploadPercent.classList.add('hidden'); // Hide the percentage
-                } else {
-                    uploadPercent.classList.remove('hidden'); // Ensure it's visible for other phases
-                }
-                currentPhaseIndex++;
-            }
-
-            // Only update percentage if it's not the finalizing stage
-            if (!uploadPercent.classList.contains('hidden')) {
-                uploadPercent.textContent = `${Math.round(simulatedPercent)}%`;
-            }
-            
-            progressFill.style.width = `${simulatedPercent}%`;
-
-            // If simulated progress reaches 100%, clear interval but keep UI at 100%
-            // It will then wait for the actual server response to change status/redirect
-            if (simulatedPercent === 100) {
-                clearInterval(processingInterval);
-            }
-        }, intervalTime);
-    }
+    updateLivePreview();
+    updateDescription();
 });
 </script>
 </body>
 </html>
+
