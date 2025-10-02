@@ -59,7 +59,7 @@ if ($loggedIn && !isset($_SESSION['remember_me'])) {
         session_destroy();
         session_start(); // Re-start session to store new message
         $_SESSION['message'] = '<div class="alert alert-error"><i class="fas fa-hourglass-end mr-2"></i> Session expired due to inactivity. Please log in again.</div>';
-        header("Location: /login?timeout=1"); // Router-friendly redirect
+        header("Location: /login.php?timeout=1"); // Router-friendly redirect
         exit;
     }
     $_SESSION['last_activity'] = time(); // Update last activity time
@@ -70,7 +70,7 @@ if ($loggedIn && !isset($_SESSION['remember_me'])) {
 // 1. If NOT Logged In: Immediate PHP header("Location: login.php"); exit;
 if (!$loggedIn) {
     $_SESSION['message'] = '<div class="alert alert-info"><i class="fas fa-info-circle mr-2"></i> Please log in to access this page.</div>';
-    header("Location: /login"); // Router-friendly redirect
+    header("Location: /login.php"); // Router-friendly redirect
     exit; // Crucial: Stop script execution after redirect
 }
 
@@ -273,8 +273,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <title><?= htmlspecialchars($pageTitle) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
-    <link href="https-fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https-cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         /* This hides elements until Alpine.js initializes, preventing FOUC (Flash Of Unstyled Content) */
         [x-cloak] { display: none !important; }
@@ -282,7 +282,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         /* General Alert Styles - IMPORTANT: Keep these consistent across all pages */
         .alert {
-            border-radius: 0.5rem;
+            border-radius: 4px;
             padding: 0.75rem 1rem;
             margin-bottom: 1rem;
             display: flex;
@@ -326,7 +326,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             width: 100%;
             padding: 0.625rem 1rem;
             border: 1px solid #d1d5db;
-            border-radius: 0.5rem;
+            border-radius: 4px;
             font-size: 1rem;
             transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
         }
@@ -351,7 +351,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 flex-direction: column;
                 margin-bottom: 1rem;
                 border: 1px solid #e5e7eb;
-                border-radius: 0.5rem;
+                border-radius: 4px;
                 overflow: hidden;
                 box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
             }
@@ -406,19 +406,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         display_session_message();
         ?>
 
-        <div class="bg-white dark:bg-gray-800 shadow-md overflow-hidden p-4 sm:p-6">
+        <div class="bg-white dark:bg-gray-800 shadow-md overflow-hidden p-4 sm:p-6 rounded">
              <div class="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
                 <div class="flex items-center gap-3">
-                    <i class="fas fa-users-cog text-3xl text-indigo-800 dark:text-indigo-400"></i>
+                    <i class="fas fa-users-cog text-3xl text-indigo-900 dark:text-indigo-400"></i>
                     <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-200">Manage Users</h2>
                 </div>
                 <div class="flex flex-col sm:flex-row items-center gap-2 w-full md:w-auto">
                     <!-- Search Form -->
-                    <form method="GET" class="flex items-stretch rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden w-full sm:w-auto">
+                    <form method="GET" class="flex items-stretch rounded border border-slate-300 dark:border-slate-600 overflow-hidden w-full sm:w-auto">
                         <div class="relative flex-1">
                             <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500"></i>
                             <input type="text" name="search" placeholder="Search..."
-                                   class="w-full pl-10 pr-3 py-2 text-sm bg-white dark:bg-gray-700 dark:text-gray-300 focus:outline-none border-0"
+                                   class="w-full pl-10 pr-3 py-2 text-sm bg-white text-gray-900 dark:bg-gray-700 dark:text-gray-300 focus:outline-none border-0"
                                    value="<?= htmlspecialchars($search ?? '') ?>">
                         </div>
 
@@ -429,7 +429,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             </a>
                         <?php else: ?>
                             <button type="submit"
-                                    class="flex items-center justify-center px-4 bg-indigo-900 dark:bg-indigo-600 text-white hover:bg-indigo-800 dark:hover:bg-indigo-700 transition-colors">
+                                    class="flex items-center justify-center px-4 bg-indigo-900 dark:bg-indigo-600 text-white hover:bg-indigo-900/90 dark:hover:bg-indigo-600/90 transition-colors">
                                 <i class="fas fa-arrow-right"></i>
                             </button>
                         <?php endif; ?>
@@ -437,14 +437,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                     <!-- Add New User Button -->
                     <a href="/users/create_user.php"
-                       class="inline-flex items-center justify-center px-4 py-2 bg-indigo-900 dark:bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-indigo-800 dark:hover:bg-indigo-700 transition-all duration-300 whitespace-nowrap w-full sm:w-auto">
+                       class="inline-flex items-center justify-center px-4 py-2 bg-indigo-900 dark:bg-indigo-600 text-white text-sm font-semibold rounded shadow-md hover:bg-indigo-900/90 dark:hover:bg-indigo-600/90 transition-all duration-300 whitespace-nowrap w-full sm:w-auto">
                         <i class="fas fa-plus mr-2"></i> Add New User
                     </a>
                 </div>
             </div>
 
             <?php if (empty($users)): ?>
-                <div class="bg-blue-50 dark:bg-gray-700 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 p-5 rounded-lg text-center shadow-inner">
+                <div class="bg-blue-50 dark:bg-gray-700 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 p-5 rounded text-center shadow-inner">
                     <i class="fas fa-info-circle text-3xl text-blue-500 dark:text-blue-400 mb-2"></i>
                     <p class="text-base font-medium">No users found matching your criteria.</p>
                 </div>
@@ -497,12 +497,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                     <td data-label="Created" class="px-6 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-600"><?= date('M d, Y', strtotime($user['created_at'])) ?></td>
                                     <td data-label="Actions" class="px-6 py-2 whitespace-nowrap text-left text-sm font-medium border border-gray-200 dark:border-gray-600">
                                         <div class="flex items-center justify-end flex-wrap gap-2">
-                                            <button @click="viewModalOpen = true; viewedUser = <?= htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>;" class="inline-flex items-center px-2 py-1 bg-indigo-900 text-white text-xs font-bold rounded-md hover:bg-indigo-800 transform hover:scale-120 transition-all duration-200" title="View User"><i class="fas fa-eye mr-1"></i> View</button>
-                                            <a href="/users/edit_user.php?id=<?= $user['user_id'] ?>" class="inline-flex items-center px-2 py-1 bg-orange-600 text-white text-xs font-bold rounded-md hover:bg-orange-700 transform hover:scale-120 transition-all duration-200" title="Edit User"><i class="fas fa-edit mr-1"></i> Edit</a>
+                                            <button @click="viewModalOpen = true; viewedUser = <?= htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>;" class="inline-flex items-center px-2 py-1 bg-indigo-900 text-white text-xs font-bold rounded hover:bg-indigo-900/90 transform hover:scale-120 transition-all duration-200" title="View User"><i class="fas fa-eye mr-1"></i> View</button>
+                                            <a href="/users/edit_user.php?user_id=<?= $user['user_id'] ?>" class="inline-flex items-center px-2 py-1 bg-orange-600 text-white text-xs font-bold rounded hover:bg-orange-700 transform hover:scale-120 transition-all duration-200" title="Edit User"><i class="fas fa-edit mr-1"></i> Edit</a>
                                             <?php if (!($user['user_role'] === 'SuperAdmin' && $userRole === 'Admin') && ((int)$user['user_id'] !== (int)$_SESSION['user_id'])): ?>
-                                                <button type="button" @click="deleteModalOpen = true; userToDeleteId = <?= $user['user_id'] ?>; userToDeleteUsername = '<?= htmlspecialchars($user['username'], ENT_QUOTES, 'UTF-8') ?>';" class="inline-flex items-center px-2 py-1 bg-red-600 text-white text-xs font-bold rounded-md hover:bg-red-700 transform hover:scale-120 transition-all duration-200" title="Delete User"><i class="fas fa-trash-alt mr-1"></i> Delete</button>
+                                                <button type="button" @click="deleteModalOpen = true; userToDeleteId = <?= $user['user_id'] ?>; userToDeleteUsername = '<?= htmlspecialchars($user['username'], ENT_QUOTES, 'UTF-8') ?>';" class="inline-flex items-center px-2 py-1 bg-red-600 text-white text-xs font-bold rounded hover:bg-red-700 transform hover:scale-120 transition-all duration-200" title="Delete User"><i class="fas fa-trash-alt mr-1"></i> Delete</button>
                                             <?php else: ?>
-                                                <button class="inline-flex items-center px-2 py-1 bg-gray-300 text-white text-xs font-bold rounded-md cursor-not-allowed" title="Cannot delete this user" disabled><i class="fas fa-trash-alt mr-1"></i> Delete</button>
+                                                <button class="inline-flex items-center px-2 py-1 bg-gray-300 text-white text-xs font-bold rounded cursor-not-allowed" title="Cannot delete this user" disabled><i class="fas fa-trash-alt mr-1"></i> Delete</button>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -524,15 +524,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             </p>
                         </div>
                         <div>
-                            <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                            <nav class="relative z-0 inline-flex rounded shadow-sm -space-x-px" aria-label="Pagination">
                                 <?php if ($page > 1): ?>
-                                    <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center justify-center w-10 h-10 rounded-l-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"><i class="fas fa-chevron-left"></i></a>
+                                    <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center justify-center w-10 h-10 rounded-l border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"><i class="fas fa-chevron-left"></i></a>
                                 <?php endif; ?>
                                 <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                                     <a href="?page=<?= $i ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="<?= $i === $page ? 'z-10 bg-indigo-50 dark:bg-indigo-900 border-indigo-500 dark:border-indigo-500 text-indigo-600 dark:text-white' : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700' ?> relative inline-flex items-center justify-center w-10 h-10 border text-sm font-medium"><?= $i ?></a>
                                 <?php endfor; ?>
                                 <?php if ($page < $totalPages): ?>
-                                    <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center justify-center w-10 h-10 rounded-r-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"><i class="fas fa-chevron-right"></i></a>
+                                    <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center justify-center w-10 h-10 rounded-r border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"><i class="fas fa-chevron-right"></i></a>
                                 <?php endif; ?>
                             </nav>
                         </div>
@@ -540,11 +540,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     <!-- Mobile Pagination -->
                     <div class="sm:hidden flex items-center justify-between">
                         <?php if ($page > 1): ?>
-                            <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700">Previous</a>
+                            <a href="?page=<?= $page - 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700">Previous</a>
                         <?php endif; ?>
                         <span class="text-sm text-gray-700 dark:text-gray-300">Page <?= $page ?> of <?= $totalPages ?></span>
                         <?php if ($page < $totalPages): ?>
-                            <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700">Next</a>
+                            <a href="?page=<?= $page + 1 ?>&search=<?= htmlspecialchars($search) ?>&role=<?= htmlspecialchars($roleFilter) ?>&status=<?= htmlspecialchars($statusFilter) ?>&sort_by=<?= htmlspecialchars($sortBy) ?>&sort_order=<?= htmlspecialchars($sortOrder) ?>" class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700">Next</a>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -565,7 +565,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
      x-transition:leave-start="opacity-100"
      x-transition:leave-end="opacity-0"
      @keydown.escape.window="deleteModalOpen = false">
-    <div class="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl max-w-sm w-full transform transition-all" @click.away="deleteModalOpen = false">
+    <div class="bg-white dark:bg-gray-800 rounded p-6 shadow-2xl max-w-sm w-full transform transition-all" @click.away="deleteModalOpen = false">
         <div class="flex items-center justify-center mb-3">
             <div class="bg-red-100 text-red-600 p-3 rounded-full flex items-center justify-center w-12 h-12">
                 <i class="fas fa-trash-alt text-2xl"></i>
@@ -579,12 +579,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <input type="hidden" name="user_id" x-model="userToDeleteId">
             <input type="hidden" name="username_to_delete" x-model="userToDeleteUsername">
             <div class="mb-3">
-                <input type="text" x-model="deleteConfirmationInput" x-ref="deleteConfirmInput" class="w-full px-3 py-2 text-sm border dark:bg-gray-700 dark:border-slate-600 dark:text-gray-300 rounded-md focus:ring-1 focus:ring-red-400 focus:border-red-400 focus:outline-none transition" :class="deleteConfirmationInput === 'delete' ? 'border-green-500' : 'border-slate-300'" placeholder="type 'delete' to confirm">
+                <input type="text" x-model="deleteConfirmationInput" x-ref="deleteConfirmInput" class="w-full px-3 py-2 text-sm border dark:bg-gray-700 dark:border-slate-600 dark:text-gray-300 rounded focus:ring-1 focus:ring-red-400 focus:border-red-400 focus:outline-none transition" :class="deleteConfirmationInput === 'delete' ? 'border-green-500' : 'border-slate-300'" placeholder="type 'delete' to confirm">
                 <p x-show="deleteError" x-text="deleteError" class="text-red-600 text-xs mt-1 font-semibold"></p>
             </div>
             <div class="flex gap-3">
-                <button type="button" @click="deleteModalOpen = false; deleteError = ''; deleteConfirmationInput = '';" class="flex-1 px-4 py-2 bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold rounded-md hover:bg-slate-300 dark:hover:bg-slate-500 transition text-sm">Cancel</button>
-                <button type="button" @click="if (deleteConfirmationInput === 'delete') { $el.closest('form').submit(); } else { deleteError = 'Incorrect confirmation text.'; }" class="flex-1 px-4 py-2 bg-red-600 text-white font-semibold rounded-md hover:bg-red-700 transition text-sm">Delete User</button>
+                <button type="button" @click="deleteModalOpen = false; deleteError = ''; deleteConfirmationInput = '';" class="flex-1 px-4 py-2 bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold rounded hover:bg-slate-300 dark:hover:bg-slate-500 transition text-sm">Cancel</button>
+                <button type="button" @click="if (deleteConfirmationInput === 'delete') { $el.closest('form').submit(); } else { deleteError = 'Incorrect confirmation text.'; }" class="flex-1 px-4 py-2 bg-red-600 text-white font-semibold rounded hover:bg-red-700 transition text-sm">Delete User</button>
             </div>
         </form>
     </div>
@@ -600,7 +600,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
      x-transition:leave-start="opacity-100"
      x-transition:leave-end="opacity-0"
      @keydown.escape.window="viewModalOpen = false">
-    <div class="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-2xl max-w-md w-full transform transition-all" @click.away="viewModalOpen = false">
+    <div class="bg-white dark:bg-gray-800 rounded p-4 sm:p-6 shadow-2xl max-w-md w-full transform transition-all" @click.away="viewModalOpen = false">
         <div class="flex items-center justify-center mb-3">
             <div class="bg-indigo-100 text-indigo-600 p-3 rounded-full flex items-center justify-center w-12 h-12">
                 <i class="fas fa-user-circle text-2xl"></i>
@@ -669,9 +669,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </div>
         
         <div class="mt-6 flex items-center gap-3">
-            <button type="button" @click="viewModalOpen = false; deleteModalOpen = true; userToDeleteId = viewedUser.user_id; userToDeleteUsername = viewedUser.username;" class="flex-1 justify-center inline-flex px-4 py-2 bg-red-600 text-white font-semibold rounded-md hover:bg-red-700 transition text-sm">Delete</button>
-            <a x-bind:href="'/users/edit_user.php?id=' + viewedUser.user_id" class="flex-1 justify-center inline-flex px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition text-sm">Edit</a>
-            <button type="button" @click="viewModalOpen = false; viewedUser = {};" class="flex-1 justify-center inline-flex px-4 py-2 bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold rounded-md hover:bg-slate-300 dark:hover:bg-slate-500 transition text-sm">Close</button>
+            <button type="button" @click="viewModalOpen = false; deleteModalOpen = true; userToDeleteId = viewedUser.user_id; userToDeleteUsername = viewedUser.username;" class="flex-1 justify-center inline-flex px-4 py-2 bg-red-600 text-white font-semibold rounded hover:bg-red-700 transition text-sm">Delete</button>
+            <a x-bind:href="'/users/edit_user.php?user_id=' + viewedUser.user_id" class="flex-1 justify-center inline-flex px-4 py-2 bg-orange-600 text-white font-semibold rounded hover:bg-orange-700 transition text-sm">Edit</a>
+            <button type="button" @click="viewModalOpen = false; viewedUser = {};" class="flex-1 justify-center inline-flex px-4 py-2 bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold rounded hover:bg-slate-300 dark:hover:bg-slate-500 transition text-sm">Close</button>
         </div>
     </div>
 </div>
