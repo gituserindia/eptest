@@ -9,6 +9,12 @@ header("X-XSS-Protection: 1; mode=block");
 header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Pragma: no-cache");
 
+// Configure secure session cookies before starting the session
+ini_set('session.cookie_httponly', 1);
+if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') {
+    ini_set('session.cookie_secure', 1);
+}
+
 // Start session at the very beginning
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -26,6 +32,12 @@ require_once BASE_PATH . '/vars/logovars.php';
 
 // Set default timezone to Asia/Kolkata (IST) for consistent date/time handling
 date_default_timezone_set('Asia/Kolkata');
+
+// --- CSRF Token Generation ---
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 
 // --- Define Logged-in State and User Role ---
 $loggedIn = isset($_SESSION['user_id']);
@@ -93,12 +105,16 @@ const LIST_THUMB_HEIGHT = 1200;
 
 // --- Handle Form Submission (AJAX POST) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Simulate processing delay for interactive demo
-    sleep(2);
-
     header('Content-Type: application/json');
     ini_set('display_errors', 0);
     error_reporting(E_ALL);
+
+    // --- CSRF Token Validation ---
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        echo json_encode(['success' => false, 'message' => 'Invalid CSRF token. Please refresh and try again.']);
+        exit;
+    }
+
 
     $title = trim($_POST['title'] ?? '');
     $publication_date = trim($_POST['publication_date'] ?? '');
@@ -110,23 +126,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $schedule_date = trim($_POST['schedule_date'] ?? '');
     $schedule_time = trim($_POST['schedule_time'] ?? '');
 
-    $status_to_save = $status;
-    $status_reason = null;
+    $scheduled_at = null; // Will hold the DATETIME for scheduled posts
 
     if ($status === 'Scheduled') {
         if (empty($schedule_date) || empty($schedule_time)) {
             echo json_encode(['success' => false, 'message' => 'Scheduled date and time are required for a scheduled post.']);
             exit;
         }
-        $status_to_save = 'Private'; // Store scheduled posts as 'Private'
-        $scheduled_datetime = $schedule_date . ' ' . $schedule_time . ':00';
-        $status_reason = 'Scheduled for ' . date('d-m-Y h:i A', strtotime($scheduled_datetime));
-    } else {
-        if (!in_array($status, ['Published', 'Private'])) {
-            $status_to_save = 'Private'; // Default for security
-        }
+        // Combine date and time for the scheduled_at column
+        $scheduled_at = $schedule_date . ' ' . $schedule_time . ':00';
     }
 
+    // Validate status value
+    if (!in_array($status, ['Published', 'Private', 'Scheduled'])) {
+        $status = 'Private'; // Default to Private for security
+    }
 
     $pdf_file = $_FILES['pdf_file'] ?? null;
 
@@ -184,8 +198,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new Exception('Failed to move uploaded PDF file.');
         }
         
-        // Construct the web-accessible path (uses forward slashes)
-        $pdf_web_path = '/' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/') . $pdf_file_name;
+        // Construct the web-accessible path, relative to the web root (uses forward slashes)
+        $pdf_web_path = '/../' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/') . $pdf_file_name;
         chmod($pdf_target_path, 0644);
 
         $images_dir = $full_edition_dir . 'images' . $ds;
@@ -236,7 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($first_page_server_path) {
             $og_image_name = 'og-thumb.jpg';
             $og_image_server_path = $images_dir . $og_image_name;
-            $og_image_web_path = '/' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/images/') . $og_image_name;
+            $og_image_web_path = '/../' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/images/') . $og_image_name;
             
             $command_og = $magick_exe_escaped . ' ' . escapeshellarg($first_page_server_path) . ' -resize ' . OG_THUMB_WIDTH . 'x -gravity North -crop ' . OG_THUMB_WIDTH . 'x' . OG_THUMB_HEIGHT . '+0+0 +repage -quality 85 ' . escapeshellarg($og_image_server_path) . ' 2>&1';
             exec($command_og, $output_og, $return_var_og);
@@ -248,7 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $list_thumb_name = 'list-thumb.jpg';
             $list_thumb_server_path = $images_dir . $list_thumb_name;
-            $list_thumb_web_path = '/' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/images/') . $list_thumb_name;
+            $list_thumb_web_path = '/../' . str_replace($ds, '/', $base_upload_dir_segment . $date_sub_path . $unique_folder_name . '/images/') . $list_thumb_name;
 
             $command_list_thumb = $magick_exe_escaped . ' ' . escapeshellarg($first_page_server_path) . ' -resize x' . LIST_THUMB_HEIGHT . ' -quality 85 ' . escapeshellarg($list_thumb_server_path) . ' 2>&1';
             exec($command_list_thumb, $output_list_thumb, $return_var_list_thumb);
@@ -260,8 +274,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         putenv('PATH=' . $original_path);
 
-        $stmt = $pdo->prepare("INSERT INTO editions (title, publication_date, category_id, description, pdf_path, og_image_path, list_thumb_path, page_count, file_size_bytes, uploader_user_id, status, status_reason, created_at, updated_at) VALUES (:title, :publication_date, :category_id, :description, :pdf_path, :og_image_path, :list_thumb_path, :page_count, :file_size_bytes, :uploader_user_id, :status, :status_reason, NOW(), NOW())");
-        $stmt->execute([':title' => $title, ':publication_date' => $publication_date, ':category_id' => $category_id, ':description' => $description, ':pdf_path' => $pdf_web_path, ':og_image_path' => $og_image_web_path, ':list_thumb_path' => $list_thumb_web_path, ':page_count' => $page_count, ':file_size_bytes' => $pdf_file['size'], ':uploader_user_id' => $uploaderUserId, ':status' => $status_to_save, ':status_reason' => $status_reason]);
+        $stmt = $pdo->prepare("INSERT INTO editions (title, publication_date, scheduled_at, category_id, description, pdf_path, og_image_path, list_thumb_path, page_count, file_size_bytes, uploader_user_id, status, created_at, updated_at) VALUES (:title, :publication_date, :scheduled_at, :category_id, :description, :pdf_path, :og_image_path, :list_thumb_path, :page_count, :file_size_bytes, :uploader_user_id, :status, NOW(), NOW())");
+        $stmt->execute([
+            ':title' => $title, 
+            ':publication_date' => $publication_date, 
+            ':scheduled_at' => $scheduled_at,
+            ':category_id' => $category_id, 
+            ':description' => $description, 
+            ':pdf_path' => $pdf_web_path, 
+            ':og_image_path' => $og_image_web_path, 
+            ':list_thumb_path' => $list_thumb_web_path, 
+            ':page_count' => $page_count, 
+            ':file_size_bytes' => $pdf_file['size'], 
+            ':uploader_user_id' => $uploaderUserId, 
+            ':status' => $status
+        ]);
         $editionId = $pdo->lastInsertId();
 
         $pdo->commit();
@@ -307,16 +334,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .dark body {
             background-color: #111827;
         }
-        .progress-bar {
+        .progress-bar-bg {
             background-color: #e5e7eb;
         }
-        .dark .progress-bar {
+        .dark .progress-bar-bg {
              background-color: #374151;
         }
         .progress-fill {
             background-color: #4f46e5;
             border-radius: 9999px;
-            transition: width 0.5s ease-in-out, background-color 0.5s ease-in-out;
+            transition: width 0.3s ease-in-out, background-color 0.3s ease-in-out;
             height: 100%;
         }
         .form-input {
@@ -346,7 +373,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             justify-content: center;
             align-items: center;
             width: 100%;
+            height: 100%;
             overflow: hidden;
+            position: relative;
         }
         #pdf-preview-canvas {
             border: 1px solid #e5e7eb;
@@ -357,6 +386,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
          .dark #pdf-preview-canvas {
             border-color: #4b5563;
+        }
+        select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            padding-right: 2.5rem; /* Space for the icon */
+        }
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            display: none;
+            -webkit-appearance: none;
+            margin: 0;
+        }
+         input[type="time"]::-webkit-calendar-picker-indicator {
+            display: none;
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        .pdf-nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 10;
+            background-color: rgba(0, 0, 0, 0.3);
+            color: white;
+            border-radius: 9999px;
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .pdf-nav-btn:hover {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .pdf-nav-btn:disabled {
+            background-color: rgba(0, 0, 0, 0.1);
+            cursor: not-allowed;
         }
     </style>
 </head>
@@ -377,6 +446,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                     <hr class="mb-6 border-gray-200 dark:border-gray-700">
                     <form id="uploadForm" method="POST" enctype="multipart/form-data" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                         <div>
                             <label for="title" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
                                 <i class="fa-solid fa-newspaper text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Edition Title
@@ -391,42 +461,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     <i class="fa-solid fa-calendar-days text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Publication Date
                                     <span class="text-red-500 ml-1">*</span>
                                 </label>
-                                <input type="date" name="publication_date" id="publication_date" value="<?= date('Y-m-d') ?>" required class="form-input">
+                                <div class="relative cursor-pointer">
+                                    <input type="date" name="publication_date" id="publication_date" value="<?= date('Y-m-d') ?>" required class="form-input pr-10">
+                                     <i class="fa-solid fa-calendar-alt text-indigo-900 dark:text-indigo-400 absolute right-3 top-1/2 transform -translate-y-1/2"></i>
+                                </div>
                             </div>
                             <div>
                                 <label for="category_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
                                     <i class="fa-solid fa-folder-open text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Category
                                     <span class="text-red-500 ml-1">*</span>
                                 </label>
-                                <select name="category_id" id="category_id" required class="form-input">
-                                    <option value="">Select a Category</option>
-                                    <?php 
-                                        $default_categories = array_filter($categories, function($c) { return $c['is_default']; });
-                                        $featured_categories = array_filter($categories, function($c) { return $c['is_featured'] && !$c['is_default']; });
-                                        $other_categories = array_filter($categories, function($c) { return !$c['is_featured'] && !$c['is_default']; });
-                                    ?>
-                                    <?php if(!empty($default_categories)): ?>
-                                        <optgroup label="Default">
-                                        <?php foreach ($default_categories as $category): ?>
-                                            <option value="<?= htmlspecialchars($category['category_id']) ?>" selected><?= htmlspecialchars($category['name']) ?></option>
-                                        <?php endforeach; ?>
-                                        </optgroup>
-                                    <?php endif; ?>
-                                     <?php if(!empty($featured_categories)): ?>
-                                        <optgroup label="Featured">
-                                        <?php foreach ($featured_categories as $category): ?>
-                                            <option value="<?= htmlspecialchars($category['category_id']) ?>"><?= htmlspecialchars($category['name']) ?></option>
-                                        <?php endforeach; ?>
-                                        </optgroup>
-                                    <?php endif; ?>
-                                     <?php if(!empty($other_categories)): ?>
-                                        <optgroup label="Other">
-                                        <?php foreach ($other_categories as $category): ?>
-                                            <option value="<?= htmlspecialchars($category['category_id']) ?>"><?= htmlspecialchars($category['name']) ?></option>
-                                        <?php endforeach; ?>
-                                        </optgroup>
-                                    <?php endif; ?>
-                                </select>
+                                <div class="relative">
+                                    <select name="category_id" id="category_id" required class="form-input">
+                                        <option value="">Select a Category</option>
+                                        <?php 
+                                            $default_categories = array_filter($categories, function($c) { return $c['is_default']; });
+                                            $featured_categories = array_filter($categories, function($c) { return $c['is_featured'] && !$c['is_default']; });
+                                            $other_categories = array_filter($categories, function($c) { return !$c['is_featured'] && !$c['is_default']; });
+                                        ?>
+                                        <?php if(!empty($default_categories)): ?>
+                                            <optgroup label="Default">
+                                            <?php foreach ($default_categories as $category): ?>
+                                                <option value="<?= htmlspecialchars($category['category_id']) ?>" selected><?= htmlspecialchars($category['name']) ?></option>
+                                            <?php endforeach; ?>
+                                            </optgroup>
+                                        <?php endif; ?>
+                                         <?php if(!empty($featured_categories)): ?>
+                                            <optgroup label="Featured">
+                                            <?php foreach ($featured_categories as $category): ?>
+                                                <option value="<?= htmlspecialchars($category['category_id']) ?>"><?= htmlspecialchars($category['name']) ?></option>
+                                            <?php endforeach; ?>
+                                            </optgroup>
+                                        <?php endif; ?>
+                                         <?php if(!empty($other_categories)): ?>
+                                            <optgroup label="Other">
+                                            <?php foreach ($other_categories as $category): ?>
+                                                <option value="<?= htmlspecialchars($category['category_id']) ?>"><?= htmlspecialchars($category['name']) ?></option>
+                                            <?php endforeach; ?>
+                                            </optgroup>
+                                        <?php endif; ?>
+                                    </select>
+                                    <i class="fa-solid fa-chevron-down text-indigo-900 dark:text-indigo-400 absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none"></i>
+                                </div>
                             </div>
                         </div>
 
@@ -440,14 +516,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         
                         <div>
                             <div class="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center shrink-0 gap-1.5 mb-2">
-                                <i class="fa-solid fa-circle-check text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Status<span class="text-red-500 ml-1">*</span>:
+                                <i class="fa-solid fa-circle-check text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>Status<span class="text-red-500 ml-1">*</span>
                             </div>
-                            <div class="flex items-center">
+                            <div class="relative">
                                 <select name="status" id="status_select" class="form-input">
                                     <option value="Published">Public</option>
                                     <option value="Private">Private</option>
                                     <option value="Scheduled">Schedule</option>
                                 </select>
+                                <i class="fa-solid fa-chevron-down text-indigo-900 dark:text-indigo-400 absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none"></i>
                             </div>
                              <span id="schedule-display" class="text-xs text-indigo-700 dark:text-indigo-400 font-medium mt-2 block"></span>
                         </div>
@@ -455,14 +532,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                          <div>
                             <label for="pdf_file" class="block text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center mb-1 gap-1.5">
-                                <i class="fa-solid fa-file-pdf text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>PDF File
+                                <i class="fa-solid fa-file-pdf text-indigo-900 dark:text-indigo-400 w-4 text-center text-sm"></i>PDF
                                 <span class="text-red-500 ml-1">*</span>
                             </label>
                             <label for="pdf_file" class="mt-1 flex justify-center items-center px-4 py-2.5 border-2 border-gray-300 dark:border-gray-600 border-dashed rounded-md cursor-pointer hover:border-indigo-500 bg-indigo-50 dark:bg-gray-700 transition-colors duration-200">
                                 <div class="flex items-center gap-3">
                                     <i class="fa-solid fa-file-pdf text-xl text-red-500"></i>
                                     <div class="text-gray-600 dark:text-gray-400 text-left">
-                                        <p class="hidden md:block text-xs">Drag & drop or <span class="font-semibold text-indigo-600 dark:text-indigo-400">click to browse</span> (PDF only, Max 50MB)</p>
+                                        <p class="hidden md:block text-xs">Drag & drop your PDF or <span class="font-semibold text-indigo-600 dark:text-indigo-400">click to browse</span> (Max 50MB)</p>
                                         <p class="md:hidden font-bold text-xs">Click to upload PDF (Max. 50MB)</p>
                                     </div>
                                 </div>
@@ -473,11 +550,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
                         <div class="flex justify-end space-x-3 pt-4">
-                            <a href="/manage-editions" class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-indigo-800 bg-indigo-200 hover:bg-indigo-300 dark:bg-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-800">
-                                Cancel
+                             <button type="button" id="clearBtn" class="inline-flex items-center justify-center w-10 h-10 md:w-auto md:px-4 md:py-2 border border-gray-300 dark:border-gray-500 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">
+                                <i class="fa-solid fa-eraser text-base md:mr-2"></i>
+                                <span class="hidden md:inline">Clear</span>
+                            </button>
+                            <a href="/upload-edition" class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-indigo-800 bg-indigo-200 hover:bg-indigo-300 dark:bg-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-800">
+                                <i class="fa-solid fa-times mr-2"></i>
+                                <span>Cancel</span>
                             </a>
                             <button type="submit" id="submitBtn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-900 hover:bg-indigo-800 dark:bg-indigo-600 dark:hover:bg-indigo-700">
-                                <i class="fa-solid fa-cloud-arrow-up mr-2"></i>Upload Edition
+                                <i class="fa-solid fa-cloud-arrow-up mr-2"></i>
+                                <span>Upload Edition</span>
                             </button>
                         </div>
                     </form>
@@ -500,8 +583,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <p class="text-slate-500 dark:text-gray-400 font-medium">(Please select PDF to preview)</p>
                             </div>
 
-                            <div id="pdf-preview-container" class="hidden w-full h-[375px] bg-indigo-50 dark:bg-gray-700 rounded-lg flex items-center justify-center p-2 mb-4 pdf-preview-wrapper">
-                                <canvas id="pdf-preview-canvas"></canvas>
+                            <div id="pdf-preview-container" class="hidden w-full h-[375px] bg-indigo-50 dark:bg-gray-700 rounded-lg p-2 mb-4">
+                                <div class="pdf-preview-wrapper">
+                                    <canvas id="pdf-preview-canvas"></canvas>
+                                    <button id="prev-page" class="pdf-nav-btn left-2 hidden"><i class="fas fa-chevron-left"></i></button>
+                                    <button id="next-page" class="pdf-nav-btn right-2 hidden"><i class="fas fa-chevron-right"></i></button>
+                                    <div id="page-counter" class="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs font-bold px-2 py-1 rounded-full hidden">
+                                        <span id="page-num">0</span> / <span id="page-count">0</span>
+                                    </div>
+                                </div>
                             </div>
 
 
@@ -524,13 +614,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                              <div id="progressContainer" class="hidden w-full p-4 bg-indigo-50 dark:bg-gray-700 border border-indigo-200 dark:border-gray-600 rounded-lg mt-4">
                                 <div class="flex items-center justify-between mb-2">
-                                    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-200">Upload Status</h3>
-                                    <div id="loading-spinner" class="hidden w-5 h-5 border-2 border-indigo-200 dark:border-gray-500 border-t-indigo-600 dark:border-t-indigo-400 rounded-full animate-spin"></div>
+                                    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                                        <i class="fa-solid fa-cloud-arrow-up text-xl text-indigo-900 dark:text-indigo-400"></i>
+                                        <span>Upload Status</span>
+                                    </h3>
+                                    <i id="statusIcon" class="fa-solid fa-spinner fa-spin text-lg text-indigo-900 dark:text-indigo-400 hidden"></i>
                                 </div>
-                                <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width: 0%;"></div></div>
-                                <div class="flex justify-between mt-2 text-xs">
-                                    <span id="uploadStatus" class="font-medium text-gray-600 dark:text-gray-300">Awaiting upload...</span>
-                                    <span id="uploadPercent" class="font-medium text-indigo-600 dark:text-indigo-400">0%</span>
+                                <div class="h-2.5 w-full bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden progress-bar-bg">
+                                    <div id="progressFill" class="progress-fill h-full" style="width: 0%;"></div>
+                                </div>
+                                <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center mt-2 text-xs gap-y-1">
+                                    <div class="w-full sm:w-auto flex items-center text-gray-600 dark:text-gray-300 min-w-0">
+                                        <span id="uploadStatus" class="font-medium truncate">Awaiting upload...</span>
+                                    </div>
+                                    <div class="w-full sm:w-auto flex items-center justify-between sm:justify-end sm:gap-2 flex-shrink-0">
+                                        <div id="speedContainer" class="hidden flex items-center text-gray-500 dark:text-gray-400">
+                                            <i class="fas fa-wifi text-xs mr-1"></i>
+                                            <span id="uploadSpeed" class="font-medium whitespace-nowrap"></span>
+                                            <span class="text-gray-400 dark:text-gray-500 hidden sm:inline-block mx-1">|</span>
+                                        </div>
+                                        <span id="uploadPercent" class="font-medium text-indigo-600 dark:text-indigo-400">0%</span>
+                                    </div>
                                 </div>
                              </div>
                          </div>
@@ -554,11 +658,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="space-y-4">
             <div>
                 <label for="schedule_date" class="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">SCHEDULE DATE</label>
-                <input type="date" id="schedule_date" class="form-input">
+                 <div class="relative cursor-pointer">
+                    <input type="date" id="schedule_date" class="form-input pr-10">
+                    <i class="fa-solid fa-calendar-alt text-indigo-900 dark:text-indigo-400 absolute right-3 top-1/2 transform -translate-y-1/2"></i>
+                </div>
             </div>
             <div>
                 <label for="schedule_time" class="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">SCHEDULE TIME</label>
-                <input type="time" id="schedule_time" class="form-input">
+                <div class="relative cursor-pointer">
+                    <input type="time" id="schedule_time" class="form-input pr-10">
+                    <i class="fa-solid fa-clock text-indigo-900 dark:text-indigo-400 absolute right-3 top-1/2 transform -translate-y-1/2"></i>
+                </div>
             </div>
         </div>
         <div class="flex gap-3 mt-6">
@@ -570,43 +680,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // FIX: Set the worker source for PDF.js
     pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
 
     const uploadForm = document.getElementById('uploadForm');
     const submitBtn = document.getElementById('submitBtn');
+    const clearBtn = document.getElementById('clearBtn');
     const pdfFileInput = document.getElementById('pdf_file');
     const progressContainer = document.getElementById('progressContainer');
     const progressFill = document.getElementById('progressFill');
     const uploadStatus = document.getElementById('uploadStatus');
     const uploadPercent = document.getElementById('uploadPercent');
-    const loadingSpinner = document.getElementById('loading-spinner');
+    const uploadSpeed = document.getElementById('uploadSpeed');
+    const speedContainer = document.getElementById('speedContainer');
+    const statusIcon = document.getElementById('statusIcon');
     const fileNameDisplay = document.getElementById('fileName');
-
-    // Drag and Drop PDF Input
     const fileUploadLabel = document.querySelector('label[for="pdf_file"]');
-
-    // Preview elements
     const previewMainTitle = document.getElementById('preview-main-title');
     const previewDateLive = document.getElementById('preview-date-live');
     const previewCategoryLive = document.getElementById('preview-category-live');
     const previewStatusLive = document.getElementById('preview-status-live');
     const previewStatusChip = document.getElementById('preview-status-chip');
-
-
     const previewPlaceholder = document.getElementById('preview-placeholder');
     const pdfPreviewContainer = document.getElementById('pdf-preview-container');
     const pdfPreviewCanvas = document.getElementById('pdf-preview-canvas');
-    
-    // Form fields for live preview
     const titleInput = document.getElementById('title');
     const dateInput = document.getElementById('publication_date');
     const categorySelect = document.getElementById('category_id');
     const descriptionInput = document.getElementById('description');
     const descriptionHidden = document.getElementById('description_hidden');
     const statusSelect = document.getElementById('status_select');
-
-    // Schedule Modal Logic
     const scheduleModal = document.getElementById('scheduleModal');
     const scheduleDateInput = document.getElementById('schedule_date');
     const scheduleTimeInput = document.getElementById('schedule_time');
@@ -614,7 +716,21 @@ document.addEventListener('DOMContentLoaded', function() {
     const cancelScheduleBtn = document.getElementById('cancelScheduleBtn');
     const scheduleDisplay = document.getElementById('schedule-display');
     
+    // PDF Preview elements
+    const prevPageBtn = document.getElementById('prev-page');
+    const nextPageBtn = document.getElementById('next-page');
+    const pageCounter = document.getElementById('page-counter');
+    const pageNumSpan = document.getElementById('page-num');
+    const pageCountSpan = document.getElementById('page-count');
+
+    let pdfDoc = null;
+    let currentPage = 1;
+    let pageRendering = false;
+    let pageNumPending = null;
+
     let previousStatusValue = statusSelect.value;
+    let processingTimeout;
+    let uploadStartTime;
 
     const hiddenScheduleDate = document.createElement('input');
     hiddenScheduleDate.type = 'hidden';
@@ -625,6 +741,16 @@ document.addEventListener('DOMContentLoaded', function() {
     hiddenScheduleTime.type = 'hidden';
     hiddenScheduleTime.name = 'schedule_time';
     uploadForm.appendChild(hiddenScheduleTime);
+
+     clearBtn.addEventListener('click', () => {
+        uploadForm.reset();
+        fileNameDisplay.textContent = '';
+        pdfPreviewContainer.classList.add('hidden');
+        previewPlaceholder.classList.remove('hidden');
+        [prevPageBtn, nextPageBtn, pageCounter].forEach(el => el.classList.add('hidden'));
+        updateLivePreview();
+        updateDescription();
+    });
     
     statusSelect.addEventListener('change', (e) => {
         if (e.target.value === 'Scheduled') {
@@ -635,47 +761,67 @@ document.addEventListener('DOMContentLoaded', function() {
             hiddenScheduleTime.value = '';
             scheduleDisplay.textContent = '';
         }
+        updateLivePreview();
     });
-
 
     cancelScheduleBtn.addEventListener('click', () => {
         scheduleModal.classList.add('hidden');
         statusSelect.value = previousStatusValue;
+        updateLivePreview();
     });
 
     confirmScheduleBtn.addEventListener('click', () => {
         if (scheduleDateInput.value && scheduleTimeInput.value) {
             hiddenScheduleDate.value = scheduleDateInput.value;
             hiddenScheduleTime.value = scheduleTimeInput.value;
-
-            // Format date and time for display
             const date = new Date(scheduleDateInput.value + 'T' + scheduleTimeInput.value);
             const formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
             const formattedTime = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-
-            const scheduleText = `(${formattedDate} at ${formattedTime})`;
-            scheduleDisplay.textContent = scheduleText;
+            scheduleDisplay.textContent = `(${formattedDate} at ${formattedTime})`;
             scheduleModal.classList.add('hidden');
         } else {
             alert('Please select both a date and time to schedule.');
         }
     });
 
+    // Make calendar icons clickable
+    dateInput.parentElement.addEventListener('click', (e) => {
+        // Prevent re-triggering if the input itself is clicked
+        if (e.target !== dateInput) {
+            dateInput.showPicker();
+        }
+    });
+    scheduleDateInput.parentElement.addEventListener('click', (e) => {
+         if (e.target !== scheduleDateInput) {
+            scheduleDateInput.showPicker();
+        }
+    });
+    scheduleTimeInput.parentElement.addEventListener('click', (e) => {
+        if (e.target !== scheduleTimeInput) {
+            scheduleTimeInput.showPicker();
+        }
+    });
+
+    function formatBytes(bytes, decimals = 2) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
 
     function updateDescription() {
         const title = titleInput.value.trim();
-        const dateValue = dateInput.value; // YYYY-MM-DD
-        
+        const dateValue = dateInput.value;
         let newDescriptionValue = '';
         if (title && dateValue) {
-            const dateParts = dateValue.split('-'); // [YYYY, MM, DD]
-            const formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
+            const dateParts = dateValue.split('-');
+            const formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
             newDescriptionValue = `${title} - ${formattedDate}`;
         } else if (title) {
             newDescriptionValue = title;
         }
-        
-        // This logic handles both the visible (on desktop) and hidden inputs
         if (document.getElementById('description')) {
              const descriptionTextarea = document.getElementById('description');
              const oldAutoValue = descriptionTextarea.dataset.autoValue || '';
@@ -688,65 +834,41 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateLivePreview() {
-        // Update Title
         previewMainTitle.textContent = titleInput.value.trim() || 'Edition Preview';
-
-        // Update Date
         previewDateLive.textContent = dateInput.value ? new Date(dateInput.value + 'T00:00:00').toLocaleDateString('en-GB') : 'N/A';
-
-        // Update Category
         const selectedCategory = categorySelect.options[categorySelect.selectedIndex];
         previewCategoryLive.textContent = selectedCategory.value ? selectedCategory.text : 'N/A';
-
-        // Update Status
-        previewStatusLive.textContent = statusSelect.options[statusSelect.selectedIndex].text;
-        
-        // Update status chip color
-        const selectedStatus = statusSelect.value;
-        if (selectedStatus === 'Published') {
+        const selectedStatusText = statusSelect.options[statusSelect.selectedIndex].text;
+        previewStatusLive.textContent = selectedStatusText;
+        const selectedStatusValue = statusSelect.value;
+        if (selectedStatusValue === 'Published') {
             previewStatusChip.className = 'flex items-center bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full';
-        } else { // Private
+        } else if (selectedStatusValue === 'Private') {
             previewStatusChip.className = 'flex items-center bg-yellow-100 text-yellow-800 text-xs font-bold px-3 py-1 rounded-full';
+        } else { // Scheduled
+             previewStatusChip.className = 'flex items-center bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-full';
         }
     }
 
-    titleInput.addEventListener('input', () => {
-        updateLivePreview();
-        updateDescription();
-    });
-    dateInput.addEventListener('change', () => {
-        updateLivePreview();
-        updateDescription();
-    });
-
-    // Also update description when the textarea is manually changed, so we don't auto-overwrite it.
+    titleInput.addEventListener('input', () => { updateLivePreview(); updateDescription(); });
+    dateInput.addEventListener('change', () => { updateLivePreview(); updateDescription(); });
     if(document.getElementById('description')){
         document.getElementById('description').addEventListener('input', (e) => {
             document.getElementById('description_hidden').value = e.target.value;
             delete e.target.dataset.autoValue;
         });
     }
-
     categorySelect.addEventListener('change', updateLivePreview);
-    statusSelect.addEventListener('change', updateLivePreview);
-
-
+    
     if(fileUploadLabel) {
-        fileUploadLabel.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            fileUploadLabel.classList.add('border-indigo-500');
-        });
-        fileUploadLabel.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            fileUploadLabel.classList.remove('border-indigo-500');
-        });
-        fileUploadLabel.addEventListener('drop', (e) => {
-            e.preventDefault();
+        ['dragover', 'dragleave', 'drop'].forEach(eventName => fileUploadLabel.addEventListener(eventName, e => e.preventDefault()));
+        fileUploadLabel.addEventListener('dragover', () => fileUploadLabel.classList.add('border-indigo-500'));
+        fileUploadLabel.addEventListener('dragleave', () => fileUploadLabel.classList.remove('border-indigo-500'));
+        fileUploadLabel.addEventListener('drop', e => {
             fileUploadLabel.classList.remove('border-indigo-500');
             if(e.dataTransfer.files.length > 0){
                 pdfFileInput.files = e.dataTransfer.files;
-                const changeEvent = new Event('change', { bubbles: true });
-                pdfFileInput.dispatchEvent(changeEvent);
+                pdfFileInput.dispatchEvent(new Event('change', { bubbles: true }));
             }
         });
     }
@@ -756,55 +878,103 @@ document.addEventListener('DOMContentLoaded', function() {
         if (file) {
             fileNameDisplay.textContent = `Selected: ${file.name}`;
             if (file.type === 'application/pdf') {
-                renderPdfPreview(file);
-            } else {
+                loadAndRenderPdf(file);
+            }
+            else {
                 pdfPreviewContainer.classList.add('hidden');
                 previewPlaceholder.classList.remove('hidden');
+                 [prevPageBtn, nextPageBtn, pageCounter].forEach(el => el.classList.add('hidden'));
             }
         } else {
             fileNameDisplay.textContent = '';
             pdfPreviewContainer.classList.add('hidden');
             previewPlaceholder.classList.remove('hidden');
+            [prevPageBtn, nextPageBtn, pageCounter].forEach(el => el.classList.add('hidden'));
         }
     });
 
-    async function renderPdfPreview(file) {
+    function renderPage(num) {
+        pageRendering = true;
+        
+        pdfDoc.getPage(num).then(function(page) {
+            const container = pdfPreviewContainer.querySelector('.pdf-preview-wrapper').parentElement;
+            const viewport = page.getViewport({ scale: 1.0 });
+            
+            const scaleX = container.clientWidth / viewport.width;
+            const scaleY = container.clientHeight / viewport.height;
+            const scale = Math.min(scaleX, scaleY);
+            
+            const scaledViewport = page.getViewport({ scale: scale });
+            
+            pdfPreviewCanvas.height = scaledViewport.height;
+            pdfPreviewCanvas.width = scaledViewport.width;
+
+            const renderContext = {
+                canvasContext: pdfPreviewCanvas.getContext('2d'),
+                viewport: scaledViewport
+            };
+            const renderTask = page.render(renderContext);
+
+            renderTask.promise.then(function() {
+                pageRendering = false;
+                if (pageNumPending !== null) {
+                    renderPage(pageNumPending);
+                    pageNumPending = null;
+                }
+            });
+        });
+
+        pageNumSpan.textContent = num;
+        prevPageBtn.disabled = num <= 1;
+        nextPageBtn.disabled = num >= pdfDoc.numPages;
+    }
+
+    function queueRenderPage(num) {
+        if (pageRendering) {
+            pageNumPending = num;
+        } else {
+            renderPage(num);
+        }
+    }
+
+    prevPageBtn.addEventListener('click', () => {
+        if (currentPage <= 1) return;
+        currentPage--;
+        queueRenderPage(currentPage);
+    });
+
+    nextPageBtn.addEventListener('click', () => {
+        if (currentPage >= pdfDoc.numPages) return;
+        currentPage++;
+        queueRenderPage(currentPage);
+    });
+
+    async function loadAndRenderPdf(file) {
         const fileReader = new FileReader();
         fileReader.onload = async function() {
             const typedarray = new Uint8Array(this.result);
             try {
-                // First, make the container visible so we can measure its width
                 previewPlaceholder.classList.add('hidden');
                 pdfPreviewContainer.classList.remove('hidden');
-
-                const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
-                const page = await pdf.getPage(1);
                 
-                const container = document.getElementById('pdf-preview-container');
-                // We get the width *after* making it visible
-                const containerWidth = container.offsetWidth;
-                
-                // Get viewport at scale 1.0 to determine original size, then calculate scale to fit container
-                const viewport = page.getViewport({ scale: 1.0 });
-                const scale = containerWidth / viewport.width;
-                const scaledViewport = page.getViewport({ scale: scale });
+                pdfjsLib.getDocument({ data: typedarray }).promise.then(function(pdfDoc_) {
+                    pdfDoc = pdfDoc_;
+                    pageCountSpan.textContent = pdfDoc.numPages;
+                    currentPage = 1;
+                    renderPage(currentPage);
 
-                const context = pdfPreviewCanvas.getContext('2d');
-                pdfPreviewCanvas.height = scaledViewport.height;
-                pdfPreviewCanvas.width = scaledViewport.width;
-
-                await page.render({
-                    canvasContext: context,
-                    viewport: scaledViewport
-                }).promise;
-
-                // The container is already visible, so no need for class changes here.
+                    if (pdfDoc.numPages > 1) {
+                         [prevPageBtn, nextPageBtn, pageCounter].forEach(el => el.classList.remove('hidden'));
+                    } else {
+                         [prevPageBtn, nextPageBtn, pageCounter].forEach(el => el.classList.add('hidden'));
+                    }
+                });
 
             } catch (error) {
                 console.error('Error rendering PDF preview:', error);
-                // If rendering fails, hide the canvas and show the placeholder again
                 pdfPreviewContainer.classList.add('hidden');
                 previewPlaceholder.classList.remove('hidden');
+                 [prevPageBtn, nextPageBtn, pageCounter].forEach(el => el.classList.add('hidden'));
             }
         };
         fileReader.readAsArrayBuffer(file);
@@ -812,69 +982,117 @@ document.addEventListener('DOMContentLoaded', function() {
 
     uploadForm.addEventListener('submit', function(e) {
         e.preventDefault();
-        
         progressContainer.classList.remove('hidden');
         if (window.innerWidth < 768) { 
             progressContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-        progressContainer.classList.remove('bg-red-100', 'bg-green-100');
-        progressContainer.classList.add('bg-indigo-50');
-        progressFill.style.backgroundColor = '#4338ca'; // Reset to indigo
+        progressFill.style.backgroundColor = '#4338ca';
+        progressFill.style.transition = 'width 0.3s ease-in-out, background-color 0.3s ease-in-out';
         progressFill.style.width = '0%';
-        uploadStatus.textContent = 'Uploading file...';
+        uploadStatus.textContent = 'Awaiting upload...';
         uploadPercent.textContent = '0%';
-        loadingSpinner.classList.remove('hidden');
+        speedContainer.classList.add('hidden');
+        statusIcon.className = 'fa-solid fa-spinner fa-spin text-lg text-indigo-900 dark:text-indigo-400';
+        statusIcon.classList.remove('hidden');
         submitBtn.disabled = true;
+
+        if(processingTimeout) clearInterval(processingTimeout);
 
         const formData = new FormData(uploadForm);
         const xhr = new XMLHttpRequest();
         
         xhr.open('POST', '/editions/upload-edition.php', true);
 
+        uploadStartTime = Date.now();
+
         xhr.upload.onprogress = function(e) {
             if (e.lengthComputable) {
-                const percentComplete = (e.loaded / e.total) * 90; // Upload will go up to 90%
+                const percentComplete = Math.round((e.loaded / e.total) * 90);
                 progressFill.style.width = percentComplete + '%';
-                uploadPercent.textContent = Math.round(percentComplete) + '%';
+                uploadPercent.textContent = percentComplete + '%';
+                
+                const elapsedTime = (Date.now() - uploadStartTime) / 1000;
+                if (elapsedTime > 0) {
+                    speedContainer.classList.remove('hidden');
+                    const speed = e.loaded / elapsedTime;
+                    uploadSpeed.textContent = formatBytes(speed) + '/s';
+                }
+
+                uploadStatus.textContent = `Uploading PDF... (${formatBytes(e.loaded)} / ${formatBytes(e.total)})`;
             }
         };
         
         xhr.upload.onload = function() {
             progressFill.style.width = '90%';
             uploadPercent.textContent = '90%';
-            uploadStatus.textContent = 'Processing file...';
+            speedContainer.classList.add('hidden');
+            statusIcon.className = 'fa-solid fa-gear fa-spin text-lg text-indigo-900 dark:text-indigo-400';
+            let statuses = ['Converting images...', 'Making thumbnails...', 'Finalizing...'];
+            let progressSteps = [93, 96];
+            let statusIndex = 0;
+            uploadStatus.textContent = statuses[statusIndex];
+
+            processingTimeout = setInterval(() => {
+                statusIndex++;
+                if (statusIndex < statuses.length) {
+                    uploadStatus.textContent = statuses[statusIndex];
+                    if(progressSteps[statusIndex - 1]) {
+                        const newProgress = progressSteps[statusIndex - 1];
+                        progressFill.style.width = newProgress + '%';
+                        uploadPercent.textContent = newProgress + '%';
+                    }
+                } else {
+                    clearInterval(processingTimeout);
+                }
+            }, 2500);
         };
 
         xhr.onload = function() {
+            clearInterval(processingTimeout);
+            speedContainer.classList.add('hidden');
+
             if (xhr.status >= 200 && xhr.status < 300) {
-                const result = JSON.parse(xhr.responseText);
-                if (result.success) {
-                    loadingSpinner.classList.add('hidden');
-                    uploadStatus.textContent = 'Successfully completed!';
-                    progressFill.style.width = '100%';
-                    uploadPercent.textContent = '100%';
-                    progressFill.style.backgroundColor = '#22c55e'; // Green for success
-                    setTimeout(() => {
-                        window.location.href = result.redirect || '/manage-editions';
-                    }, 1000);
-                } else {
-                    loadingSpinner.classList.add('hidden');
-                    uploadStatus.textContent = 'Upload failed: ' + result.message;
-                    progressFill.style.backgroundColor = '#ef4444'; // Red for fail
+                try {
+                    const result = JSON.parse(xhr.responseText);
+                    if (result.success) {
+                        progressFill.style.width = '100%';
+                        uploadPercent.textContent = '100%';
+                        uploadStatus.textContent = 'Successfully completed!';
+                        progressFill.style.backgroundColor = '#22c55e';
+                        statusIcon.className = 'fa-solid fa-circle-check text-lg text-green-500';
+                        setTimeout(() => {
+                            window.location.href = result.redirect || '/manage-editions';
+                        }, 1500);
+                    } else {
+                        uploadStatus.textContent = 'Upload failed: ' + result.message;
+                        progressFill.style.backgroundColor = '#ef4444';
+                        uploadPercent.textContent = 'Error';
+                        statusIcon.className = 'fa-solid fa-circle-xmark text-lg text-red-500';
+                        submitBtn.disabled = false;
+                    }
+                } catch(e) {
+                    uploadStatus.textContent = 'Error: Invalid server response.';
+                    progressFill.style.backgroundColor = '#ef4444';
+                    uploadPercent.textContent = 'Error';
+                    statusIcon.className = 'fa-solid fa-circle-xmark text-lg text-red-500';
                     submitBtn.disabled = false;
                 }
             } else {
-                 loadingSpinner.classList.add('hidden');
-                 uploadStatus.textContent = 'Upload error. Please try again.';
+                 uploadStatus.textContent = 'Upload error: ' + xhr.status;
                  progressFill.style.backgroundColor = '#ef4444';
+                 uploadPercent.textContent = 'Error';
+                 statusIcon.className = 'fa-solid fa-circle-xmark text-lg text-red-500';
                  submitBtn.disabled = false;
             }
         };
 
         xhr.onerror = function() {
-            loadingSpinner.classList.add('hidden');
+            clearInterval(processingTimeout);
+            speedContainer.classList.add('hidden');
             uploadStatus.textContent = 'Network error. Please try again.';
             progressFill.style.backgroundColor = '#ef4444';
+            uploadPercent.textContent = 'Error';
+            statusIcon.className = 'fa-solid fa-circle-xmark text-lg text-red-500';
             submitBtn.disabled = false;
         };
 
